@@ -1,0 +1,110 @@
+### List All Models (Chat + Audio)
+GET http://localhost:5164/v1/models
+
+### List Chat Models Only
+GET http://localhost:5164/v1/models/chat
+
+### List Audio Models Only
+GET http://localhost:5164/v1/models/audio
+
+### Get Specific Chat Model Info
+GET http://localhost:5164/v1/models/llama-3.2-3b-instruct
+
+### Get Specific Audio Model Info
+GET http://localhost:5164/v1/models/tiny
+
+### Get Whisper-1 Model Info (Alias for base)
+GET http://localhost:5164/v1/models/whisper-1
+
+### Chat with Different Models
+POST http://localhost:5164/v1/chat/completions
+Content-Type: application/json
+
+{
+  "model": "llama-3.2-1b-instruct",
+  "messages": [{"role": "user", "content": "Hello! Which model are you?"}],
+  "max_tokens": 50
+}
+
+### Audio Transcription with Tiny Model (Fastest)
+POST http://localhost:5164/v1/audio/transcriptions
+Content-Type: multipart/form-data; boundary=boundary
+
+--boundary
+Content-Disposition: form-data; name="file"; filename="test.wav"
+Content-Type: audio/wav
+
+< path/to/test.wav
+--boundary
+Content-Disposition: form-data; name="model"
+
+tiny
+--boundary
+Content-Disposition: form-data; name="response_format"
+
+json
+--boundary--
+
+### Audio Transcription with Base Model (Default)
+POST http://localhost:5164/v1/audio/transcriptions
+Content-Type: multipart/form-data; boundary=boundary
+
+--boundary
+Content-Disposition: form-data; name="file"; filename="test.mp3"
+Content-Type: audio/mpeg
+
+< path/to/test.mp3
+--boundary
+Content-Disposition: form-data; name="model"
+
+whisper-1
+--boundary
+Content-Disposition: form-data; name="response_format"
+
+json
+--boundary--
+
+### Audio Transcription with Large Model (Best Quality)
+POST http://localhost:5164/v1/audio/transcriptions
+Content-Type: multipart/form-data; boundary=boundary
+
+--boundary
+Content-Disposition: form-data; name="file"; filename="test.flac"
+Content-Type: audio/flac
+
+< path/to/test.flac
+--boundary
+Content-Disposition: form-data; name="model"
+
+large-v3
+--boundary
+Content-Disposition: form-data; name="response_format"
+
+json
+--boundary--
+
+### Test Invalid Models (Should Return Errors)
+
+# Invalid Chat Model
+POST http://localhost:5164/v1/chat/completions
+Content-Type: application/json
+
+{
+  "model": "nonexistent-chat-model",
+  "messages": [{"role": "user", "content": "This should fail"}]
+}
+
+### Invalid Audio Model
+POST http://localhost:5164/v1/audio/transcriptions
+Content-Type: multipart/form-data; boundary=boundary
+
+--boundary
+Content-Disposition: form-data; name="file"; filename="test.wav"
+Content-Type: audio/wav
+
+< path/to/test.wav
+--boundary
+Content-Disposition: form-data; name="model"
+
+nonexistent-whisper-model
+--boundary--

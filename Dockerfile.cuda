@@ -1,0 +1,75 @@
+FROM ubuntu:22.04 AS base-libs
+RUN apt-get update && apt-get install -y \
+    curl \
+    wget \
+    ca-certificates \
+    git \
+    build-essential \
+    cmake \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install CUDA 
+RUN wget https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64/cuda-keyring_1.1-1_all.deb
+RUN dpkg -i cuda-keyring_1.1-1_all.deb
+RUN apt-get update && apt-get install -y \
+    cuda-toolkit-12-4 cuda-drivers
+
+WORKDIR /src
+COPY . .
+RUN git submodule update --init --recursive
+WORKDIR /src/Libs/LLamaSharp/llama.cpp
+RUN mkdir build && cd build && cmake .. -DLLAMA_CUDA=ON -DLLAMA_AVX2=ON -DLLAMA_AVX=ON -DBUILD_SHARED_LIBS=ON -DGGML_NATIVE=OFF -DLLAMA_BUILD_TESTS=OFF -DLLAMA_BUILD_EXAMPLES=OFF -DLLAMA_BUILD_SERVER=OFF -DLLAMA_CURL=OFF && cmake --build . --config Release -j $(nproc)
+WORKDIR /src/Libs/LLamaSharp/llama.cpp
+RUN mkdir -p build/bin/libs
+RUN cp build/bin/*.so build/bin/libs/
+
+
+FROM nvidia/cuda:12.4.0-runtime-ubuntu22.04 AS base
+RUN apt-get update && apt-get install -y \
+    curl \
+    wget \
+    ca-certificates \
+    cuda-compat-13-0 \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install .NET 9 runtime
+RUN wget https://packages.microsoft.com/config/ubuntu/22.04/packages-microsoft-prod.deb -O packages-microsoft-prod.deb \
+    && dpkg -i packages-microsoft-prod.deb \
+    && rm packages-microsoft-prod.deb \
+    && apt-get update \
+    && apt-get install -y aspnetcore-runtime-9.0 \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install FFmpeg for audio processing
+RUN apt-get update && apt-get install -y \
+    ffmpeg \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+EXPOSE 80
+EXPOSE 443
+
+FROM mcr.microsoft.com/dotnet/sdk:9.0 AS build
+WORKDIR /src
+COPY ["SharpAI.csproj", "."]
+COPY . .
+RUN dotnet add package LLamaSharp.Backend.Cuda12
+RUN dotnet add package LLamaSharp.Backend.Cuda12.Linux
+RUN dotnet restore "SharpAI.csproj"
+WORKDIR "/src"
+RUN dotnet build "SharpAI.csproj" -c Release -o /app/build
+
+FROM build AS publish
+RUN dotnet publish "SharpAI.csproj" -c Release -o /app/publish
+
+FROM base AS final
+WORKDIR /app
+COPY --from=publish /app/publish .
+COPY --from=base-libs /src/Libs/LLamaSharp/llama.cpp/build/bin/libs runtimes/cuda/linux-x64/
+
+EXPOSE 80
+ENV ASPNETCORE_HTTP_PORTS=80
+ENV NVIDIA_VISIBLE_DEVICES=all
+ENV NVIDIA_DRIVER_CAPABILITIES=compute,utility
+
+ENTRYPOINT ["dotnet", "SharpAI.dll"]

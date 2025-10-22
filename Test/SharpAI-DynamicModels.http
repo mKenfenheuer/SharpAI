@@ -1,0 +1,101 @@
+### List Available Models
+GET http://localhost:5164/v1/models
+
+### Get Specific Model Info
+GET http://localhost:5164/v1/models/llama-3.2-3b-instruct
+
+### Chat Completion with Default Model (llama-3.2-3b-instruct)
+POST http://localhost:5164/v1/chat/completions
+Content-Type: application/json
+
+{
+  "model": "llama-3.2-3b-instruct",
+  "messages": [
+    {
+      "role": "user",
+      "content": "Hello! Can you tell me which model you are?"
+    }
+  ],
+  "max_tokens": 100,
+  "temperature": 0.7
+}
+
+### Chat Completion with Smaller Model (llama-3.2-1b-instruct)
+POST http://localhost:5164/v1/chat/completions
+Content-Type: application/json
+
+{
+  "model": "llama-3.2-1b-instruct",
+  "messages": [
+    {
+      "role": "user",
+      "content": "Hello! Can you solve this math problem: 15 + 27 = ?"
+    }
+  ],
+  "max_tokens": 50,
+  "temperature": 0.1
+}
+
+### Chat Completion with Phi-3 Model
+POST http://localhost:5164/v1/chat/completions
+Content-Type: application/json
+
+{
+  "model": "phi-3-mini-instruct",
+  "messages": [
+    {
+      "role": "user",
+      "content": "Write a short poem about artificial intelligence."
+    }
+  ],
+  "max_tokens": 150,
+  "temperature": 0.8
+}
+
+### Chat Completion with Gemma Model
+POST http://localhost:5164/v1/chat/completions
+Content-Type: application/json
+
+{
+  "model": "gemma-2-2b-instruct",
+  "messages": [
+    {
+      "role": "user",
+      "content": "Explain the concept of machine learning in simple terms."
+    }
+  ],
+  "max_tokens": 200,
+  "temperature": 0.5
+}
+
+### Streaming Chat with Different Model
+POST http://localhost:5164/v1/chat/completions
+Content-Type: application/json
+
+{
+  "model": "llama-3.2-1b-instruct",
+  "messages": [
+    {
+      "role": "user",
+      "content": "Tell me a short story about a robot learning to paint."
+    }
+  ],
+  "max_tokens": 300,
+  "temperature": 0.9,
+  "stream": true
+}
+
+### Test Invalid Model (Should Return Error)
+POST http://localhost:5164/v1/chat/completions
+Content-Type: application/json
+
+{
+  "model": "nonexistent-model",
+  "messages": [
+    {
+      "role": "user",
+      "content": "This should fail."
+    }
+  ],
+  "max_tokens": 50
+}

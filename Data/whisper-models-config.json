@@ -1,0 +1,76 @@
+{
+  "models": [
+    {
+      "name": "tiny",
+      "ggml_type": 0,
+      "filename": "ggml-tiny.bin",
+      "description": "Fastest, lowest accuracy - Good for real-time applications",
+      "size_mb": 39,
+      "speed": "Very Fast",
+      "accuracy": "Low"
+    },
+    {
+      "name": "base",
+      "ggml_type": 2,
+      "filename": "ggml-base.bin",
+      "description": "Balanced speed and accuracy - Default model",
+      "size_mb": 142,
+      "speed": "Fast",
+      "accuracy": "Good"
+    },
+    {
+      "name": "small",
+      "ggml_type": 4,
+      "filename": "ggml-small.bin",
+      "description": "Good accuracy, moderate speed",
+      "size_mb": 466,
+      "speed": "Medium",
+      "accuracy": "Better"
+    },
+    {
+      "name": "medium",
+      "ggml_type": 6,
+      "filename": "ggml-medium.bin",
+      "description": "High accuracy, slower processing",
+      "size_mb": 1520,
+      "speed": "Slow",
+      "accuracy": "High"
+    },
+    {
+      "name": "large-v1",
+      "ggml_type": 8,
+      "filename": "ggml-large-v1.bin",
+      "description": "Highest accuracy, slowest processing - Original large model",
+      "size_mb": 2900,
+      "speed": "Very Slow",
+      "accuracy": "Highest"
+    },
+    {
+      "name": "large-v2",
+      "ggml_type": 9,
+      "filename": "ggml-large-v2.bin",
+      "description": "Highest accuracy, slowest processing - Improved large model",
+      "size_mb": 2900,
+      "speed": "Very Slow",
+      "accuracy": "Highest"
+    },
+    {
+      "name": "large-v3",
+      "ggml_type": 10,
+      "filename": "ggml-large-v3.bin",
+      "description": "Latest and most accurate model - Best quality",
+      "size_mb": 2900,
+      "speed": "Very Slow",
+      "accuracy": "Best"
+    },
+    {
+      "name": "large-v3-turbo",
+      "ggml_type": 10,
+      "filename": "ggml-large-v3-turbo.bin",
+      "description": "Latest and most accurate model - Best quality (Turbo)",
+      "size_mb": 1700,
+      "speed": "Slow",
+      "accuracy": "Best"
+    }
+  ]
+}

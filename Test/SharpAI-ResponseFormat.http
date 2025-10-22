@@ -1,0 +1,151 @@
+### Chat Completion with Text Response (Default)
+POST http://localhost:5000/v1/chat/completions
+Content-Type: application/json
+
+{
+  "model": "llama-3.2-3b-instruct",
+  "messages": [
+    {"role": "user", "content": "Tell me about the weather today."}
+  ],
+  "response_format": {
+    "type": "text"
+  }
+}
+
+### Chat Completion with JSON Object Response
+POST http://localhost:5000/v1/chat/completions
+Content-Type: application/json
+
+{
+  "model": "llama-3.2-3b-instruct",
+  "messages": [
+    {"role": "user", "content": "Generate a simple weather report for today"}
+  ],
+  "response_format": {
+    "type": "json_object"
+  }
+}
+
+### Chat Completion with JSON Schema Response
+POST http://localhost:5000/v1/chat/completions
+Content-Type: application/json
+
+{
+  "model": "llama-3.2-3b-instruct",
+  "messages": [
+    {"role": "user", "content": "Generate a weather report for San Francisco today"}
+  ],
+  "response_format": {
+    "type": "json_schema",
+    "json_schema": {
+      "name": "weather_report",
+      "description": "A structured weather report",
+      "schema": {
+        "type": "object",
+        "properties": {
+          "location": {
+            "type": "string",
+            "description": "The location for the weather report"
+          },
+          "temperature": {
+            "type": "number",
+            "description": "Temperature in Fahrenheit"
+          },
+          "condition": {
+            "type": "string",
+            "description": "Weather condition (e.g., sunny, cloudy, rainy)"
+          },
+          "humidity": {
+            "type": "number",
+            "description": "Humidity percentage"
+          }
+        },
+        "required": ["location", "temperature", "condition"]
+      },
+      "strict": true
+    }
+  }
+}
+
+### Chat Completion with Streaming and JSON Schema
+POST http://localhost:5000/v1/chat/completions
+Content-Type: application/json
+
+{
+  "model": "llama-3.2-3b-instruct",
+  "messages": [
+    {"role": "user", "content": "Create a user profile for John Doe"}
+  ],
+  "stream": true,
+  "response_format": {
+    "type": "json_schema",
+    "json_schema": {
+      "name": "user_profile",
+      "description": "A user profile object",
+      "schema": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "age": {
+            "type": "number"
+          },
+          "email": {
+            "type": "string"
+          },
+          "interests": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": ["name", "email"]
+      },
+      "strict": false
+    }
+  }
+}
+
+### Function Calling with JSON Schema Response
+POST http://localhost:5000/v1/chat/completions
+Content-Type: application/json
+
+{
+  "model": "llama-3.2-3b-instruct",
+  "messages": [
+    {"role": "user", "content": "What time is it and give me the result in a specific format?"}
+  ],
+  "tools": [
+    {
+      "type": "function",
+      "function": {
+        "name": "get_current_time",
+        "description": "Get the current date and time"
+      }
+    }
+  ],
+  "response_format": {
+    "type": "json_schema",
+    "json_schema": {
+      "name": "time_response",
+      "description": "Response containing time information",
+      "schema": {
+        "type": "object",
+        "properties": {
+          "message": {
+            "type": "string"
+          },
+          "needs_function_call": {
+            "type": "boolean"
+          },
+          "function_name": {
+            "type": "string"
+          }
+        },
+        "required": ["message", "needs_function_call"]
+      }
+    }
+  }
+}
