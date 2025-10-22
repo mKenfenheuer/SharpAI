@@ -1,3 +1,0 @@
-[submodule "Libs/LLamaSharp"]
-	path = Libs/LLamaSharp
-	url = https://github.com/mkenfenheuer/LLamaSharp.git

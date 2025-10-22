@@ -4,6 +4,10 @@
     <TargetFramework>net9.0</TargetFramework>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <WarningLevel>0</WarningLevel>
+    <GenerateAssemblyInfo>false</GenerateAssemblyInfo>
+    <GenerateTargetFrameworkAttribute>false</GenerateTargetFrameworkAttribute>  
   </PropertyGroup>
 
   <ItemGroup>
@@ -13,8 +17,16 @@
     <PackageReference Include="Whisper.net.Runtime" Version="1.8.1" />
   </ItemGroup>
 
+  <ItemGroup> 
+  <Content Include="Libs\llama.cpp\**"> 
+    <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory> 
+  </Content> 
+</ItemGroup>
+ 
   <ItemGroup>
-    <ProjectReference Include="Libs\LLamaSharp\LLama\LLamaSharp.csproj" />
+    <Reference Include="LLamaSharp">
+      <HintPath>Libs\LLamaSharp.dll</HintPath>
+    </Reference>
   </ItemGroup>
   <PropertyGroup>
     <ErrorOnDuplicatePublishOutputFiles>false</ErrorOnDuplicatePublishOutputFiles>

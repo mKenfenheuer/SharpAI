@@ -6,6 +6,9 @@
       "extensions": ["ms-dotnettools.csdevkit"]
     }
   },
-
+  "runArgs": [
+      "--gpus",
+      "all"
+  ],
   "forwardPorts": [5000]
 }

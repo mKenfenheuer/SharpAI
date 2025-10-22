@@ -1,29 +1,3 @@
-FROM ubuntu:22.04 AS base-libs
-RUN apt-get update && apt-get install -y \
-    curl \
-    wget \
-    ca-certificates \
-    git \
-    build-essential \
-    cmake \
-    && rm -rf /var/lib/apt/lists/*
-
-# Install CUDA 
-RUN wget https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64/cuda-keyring_1.1-1_all.deb
-RUN dpkg -i cuda-keyring_1.1-1_all.deb
-RUN apt-get update && apt-get install -y \
-    cuda-toolkit-12-4 cuda-drivers
-
-WORKDIR /src
-COPY . .
-RUN git submodule update --init --recursive
-WORKDIR /src/Libs/LLamaSharp/llama.cpp
-RUN mkdir build && cd build && cmake .. -DLLAMA_CUDA=ON -DLLAMA_AVX2=ON -DLLAMA_AVX=ON -DBUILD_SHARED_LIBS=ON -DGGML_NATIVE=OFF -DLLAMA_BUILD_TESTS=OFF -DLLAMA_BUILD_EXAMPLES=OFF -DLLAMA_BUILD_SERVER=OFF -DLLAMA_CURL=OFF && cmake --build . --config Release -j $(nproc)
-WORKDIR /src/Libs/LLamaSharp/llama.cpp
-RUN mkdir -p build/bin/libs
-RUN cp build/bin/*.so build/bin/libs/
-
-
 FROM nvidia/cuda:12.4.0-runtime-ubuntu22.04 AS base
 RUN apt-get update && apt-get install -y \
     curl \

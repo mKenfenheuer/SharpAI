@@ -24,8 +24,16 @@ namespace SharpAI.Services
             _nativeLogging = nativeLogging;
             _httpClient = httpClient;
             _modelsDirectory = Path.Combine("Data", "Models");
-            Directory.CreateDirectory(_modelsDirectory);            
+            Directory.CreateDirectory(_modelsDirectory);
             _modelsConfig = LoadModelsConfiguration();
+            if (Environment.GetEnvironmentVariable("CUDA_HOME") != null)
+            {
+                NativeLibraryConfig.Instance.WithLibrary("Libs/llama.cpp/linux-x64/cuda", "Libs/llama.cpp/linux-x64/cuda");
+            }
+            else
+            {
+                NativeLibraryConfig.Instance.WithLibrary("Libs/llama.cpp/linux-x64/cpu","Libs/llama.cpp/linux-x64/cpu");
+            }
         }
 
         public async Task<ModelInstance> GetModelAsync(string modelName)
