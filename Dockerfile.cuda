@@ -1,3 +1,4 @@
+# FROM nvidia/cuda:12.4.0-runtime-ubuntu22.04 AS base
 FROM nvidia/cuda:12.4.0-runtime-ubuntu22.04 AS base
 RUN apt-get update && apt-get install -y \
     curl \
@@ -27,6 +28,7 @@ FROM mcr.microsoft.com/dotnet/sdk:9.0 AS build
 WORKDIR /src
 COPY ["SharpAI.csproj", "."]
 COPY . .
+
 RUN dotnet add package LLamaSharp.Backend.Cuda12
 RUN dotnet add package LLamaSharp.Backend.Cuda12.Linux
 RUN dotnet restore "SharpAI.csproj"
@@ -34,16 +36,21 @@ WORKDIR "/src"
 RUN dotnet build "SharpAI.csproj" -c Release -o /app/build
 
 FROM build AS publish
-RUN dotnet publish "SharpAI.csproj" -c Release -o /app/publish
+# ...existing code...
+# Changed to publish a self-contained linux-x64 application
+RUN dotnet publish "SharpAI.csproj" -c Release -r linux-x64 --self-contained true -o /app/publish
 
 FROM base AS final
 WORKDIR /app
 COPY --from=publish /app/publish .
-COPY --from=base-libs /src/Libs/LLamaSharp/llama.cpp/build/bin/libs runtimes/cuda/linux-x64/
+
+# ensure the self-contained native executable is runnable
+RUN if [ -f /app/SharpAI ]; then chmod +x /app/SharpAI; fi
 
 EXPOSE 80
 ENV ASPNETCORE_HTTP_PORTS=80
 ENV NVIDIA_VISIBLE_DEVICES=all
 ENV NVIDIA_DRIVER_CAPABILITIES=compute,utility
 
-ENTRYPOINT ["dotnet", "SharpAI.dll"]
+# Run the self-contained native executable instead of 'dotnet SharpAI.dll'
+ENTRYPOINT ["./SharpAI"]
