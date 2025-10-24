@@ -1,0 +1,69 @@
+### Test Response Format - Harmony Parsing
+
+### Simple question that should generate final channel response
+POST http://localhost:5164/v1/chat/completions
+Content-Type: application/json
+
+{
+  "model": "gpt-4",
+  "messages": [
+    {"role": "user", "content": "Hello, how are you?"}
+  ],
+  "max_tokens": 100,
+  "reasoning_effort": "low"
+}
+
+### Question that should trigger function calling
+POST http://localhost:5164/v1/chat/completions
+Content-Type: application/json
+
+{
+  "model": "gpt-4",
+  "messages": [
+    {"role": "user", "content": "What time is it?"}
+  ],
+  "tools": [
+    {
+      "type": "function",
+      "function": {
+        "name": "get_current_time",
+        "description": "Get the current time",
+        "parameters": {
+          "type": "object",
+          "properties": {},
+          "required": []
+        }
+      }
+    }
+  ],
+  "tool_choice": "auto",
+  "max_tokens": 200,
+  "reasoning_effort": "medium"
+}
+
+### Streaming response test
+POST http://localhost:5164/v1/chat/completions
+Content-Type: application/json
+
+{
+  "model": "gpt-4",
+  "messages": [
+    {"role": "user", "content": "Tell me a short story"}
+  ],
+  "stream": true,
+  "max_tokens": 150,
+  "reasoning_effort": "medium"
+}
+
+### Test with reasoning effort high
+POST http://localhost:5164/v1/chat/completions
+Content-Type: application/json
+
+{
+  "model": "gpt-4",
+  "messages": [
+    {"role": "user", "content": "Explain quantum physics in simple terms"}
+  ],
+  "max_tokens": 200,
+  "reasoning_effort": "high"
+}

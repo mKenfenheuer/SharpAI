@@ -7,6 +7,15 @@ using System.Text.Json;
 
 namespace SharpAI.Services
 {
+    /// <summary>
+    /// Manages GPT-OSS models and provides OpenAI-compatible model name mapping.
+    /// Supports gpt-oss-20b and gpt-oss-120b models with harmony response format.
+    /// 
+    /// Model Mapping:
+    /// - Standard OpenAI models (gpt-4, gpt-4o, gpt-3.5-turbo, etc.) → gpt-oss-20b
+    /// - Larger models (gpt-5, gpt-5-pro, o1, o1-preview) → gpt-oss-120b
+    /// - Direct model names (gpt-oss-20b, gpt-oss-120b) → No mapping
+    /// </summary>
     public class LLamaModelManager : IDisposable
     {
         private readonly string _modelsDirectory;
@@ -30,19 +39,27 @@ namespace SharpAI.Services
 
         public async Task<ModelInstance> GetModelAsync(string modelName)
         {
+            // Map OpenAI model names to gpt-oss models
+            var mappedModelName = MapOpenAIModelToGptOss(modelName);
+            
+            if (mappedModelName != modelName)
+            {
+                _logger.LogInformation("Mapped model '{RequestedModel}' to '{MappedModel}'", modelName, mappedModelName);
+            }
+            
             // Check if model is already loaded
-            if (_loadedModels.TryGetValue(modelName, out var existingModel))
+            if (_loadedModels.TryGetValue(mappedModelName, out var existingModel))
             {
                 return existingModel;
             }
 
             // Find model configuration
             var modelConfig = _modelsConfig.Models.FirstOrDefault(m => 
-                m.Name.Equals(modelName, StringComparison.OrdinalIgnoreCase));
+                m.Name.Equals(mappedModelName, StringComparison.OrdinalIgnoreCase));
 
             if (modelConfig == null)
             {
-                throw new ArgumentException($"Model '{modelName}' is not configured. Available models: {string.Join(", ", _modelsConfig.Models.Select(m => m.Name))}");
+                throw new ArgumentException($"Model '{modelName}' is not supported. Only gpt-oss-20b and gpt-oss-120b models are available.");
             }
 
             // Ensure model file exists (download if needed)
@@ -51,8 +68,8 @@ namespace SharpAI.Services
             // Load the model
             var modelInstance = await LoadModelAsync(modelConfig, modelPath);
             
-            // Cache the loaded model
-            _loadedModels.TryAdd(modelName, modelInstance);
+            // Cache the loaded model using the mapped name
+            _loadedModels.TryAdd(mappedModelName, modelInstance);
             
             return modelInstance;
         }
@@ -188,58 +205,40 @@ namespace SharpAI.Services
 
         private async Task<LLamaTemplate?> LoadJinjaTemplateAsync(ModelConfiguration config, LLamaWeights weights)
         {
-            try
+            // GPT-OSS models use harmony format, not Jinja templates
+            // Return null as templates are handled by the harmony formatter in LLamaSharp service
+            _logger.LogInformation("Using harmony format for GPT-OSS model {ModelName}, no template needed", config.Name);
+            return null;
+        }
+
+        private string MapOpenAIModelToGptOss(string modelName)
+        {
+            return modelName.ToLowerInvariant() switch
             {
-                LLamaTemplate? template = null;
-
-                // First try to use the model's built-in template if enabled
-                if (config.UseModelTemplate)
-                {
-                    try
-                    {
-                        template = new LLamaTemplate(weights, strict: false);
-                        _logger.LogInformation("Using built-in Jinja template for model {ModelName}", config.Name);
-                        return template;
-                    }
-                    catch (Exception ex)
-                    {
-                        _logger.LogWarning(ex, "Failed to load built-in template for model {ModelName}, falling back to custom template", config.Name);
-                    }
-                }
-
-                // Try custom raw template
-                if (!string.IsNullOrEmpty(config.JinjaTemplateRaw))
-                {
-                    template = new LLamaTemplate(config.JinjaTemplateRaw);
-                    _logger.LogInformation("Using custom raw Jinja template for model {ModelName}", config.Name);
-                    return template;
-                }
-
-                // Try downloading template from URL
-                if (!string.IsNullOrEmpty(config.JinjaTemplateUrl))
-                {
-                    try
-                    {
-                        var templateContent = await _httpClient.GetStringAsync(config.JinjaTemplateUrl);
-                        template = new LLamaTemplate(templateContent);
-                        _logger.LogInformation("Downloaded and loaded Jinja template from URL for model {ModelName}", config.Name);
-                        return template;
-                    }
-                    catch (Exception ex)
-                    {
-                        _logger.LogWarning(ex, "Failed to download Jinja template from URL {Url} for model {ModelName}", 
-                            config.JinjaTemplateUrl, config.Name);
-                    }
-                }
-
-                _logger.LogInformation("No Jinja template configured or available for model {ModelName}, will use default formatting", config.Name);
-                return null;
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "Error loading Jinja template for model {ModelName}", config.Name);
-                return null;
-            }
+                // Direct gpt-oss model names
+                "gpt-oss-20b" => "gpt-oss-20b",
+                "gpt-oss-120b" => "gpt-oss-120b",
+                
+                // Standard OpenAI models -> gpt-oss-20b (default)
+                "gpt-4" => "gpt-oss-20b",
+                "gpt-4-turbo" => "gpt-oss-20b", 
+                "gpt-4-turbo-preview" => "gpt-oss-20b",
+                "gpt-4o" => "gpt-oss-20b",
+                "gpt-4o-mini" => "gpt-oss-20b",
+                "gpt-3.5-turbo" => "gpt-oss-20b",
+                "chatgpt-4o-latest" => "gpt-oss-20b",
+                
+                // Larger/Pro models -> gpt-oss-120b
+                "gpt-5" => "gpt-oss-120b",
+                "gpt-5-pro" => "gpt-oss-120b",
+                "gpt-4-pro" => "gpt-oss-120b",
+                "o1" => "gpt-oss-120b",
+                "o1-preview" => "gpt-oss-120b",
+                "o1-mini" => "gpt-oss-20b", // o1-mini maps to smaller model
+                
+                // Default fallback to 20b model
+                _ => "gpt-oss-20b"
+            };
         }
 
         private ModelsConfiguration LoadModelsConfiguration()
@@ -251,88 +250,23 @@ namespace SharpAI.Services
                 {
                     new ModelConfiguration
                     {
-                        Name = "llama-3.2-3b-instruct",
-                        HuggingFaceId = "bartowski/Llama-3.2-3B-Instruct-GGUF",
-                        Filename = "Llama-3.2-3B-Instruct-Q4_K_M.gguf",
-                        ContextSize = 4096,
-                        GpuLayers = 99999,
-                        Description = "Llama 3.2 3B Instruct model optimized for chat",
-                        SizeGB = 2.02,
-                        Type = "instruct",
-                        UseModelTemplate = true
-                    },
-                    new ModelConfiguration
-                    {
-                        Name = "llama-3.2-1b-instruct",
-                        HuggingFaceId = "bartowski/Llama-3.2-1B-Instruct-GGUF",
-                        Filename = "Llama-3.2-1B-Instruct-Q4_K_M.gguf",
-                        ContextSize = 4096,
-                        GpuLayers = 99999,
-                        Description = "Llama 3.2 1B Instruct model - smaller and faster",
-                        SizeGB = 0.8,
-                        Type = "instruct",
-                        UseModelTemplate = true
-                    },
-                    new ModelConfiguration
-                    {
-                        Name = "phi-3-mini-instruct",
-                        HuggingFaceId = "microsoft/Phi-3-mini-4k-instruct-gguf",
-                        Filename = "Phi-3-mini-4k-instruct-q4.gguf",
-                        ContextSize = 4096,
-                        GpuLayers = 99999,
-                        Description = "Microsoft Phi-3 Mini optimized for instruction following",
-                        SizeGB = 2.4,
-                        Type = "instruct",
-                        UseModelTemplate = true
-                    },
-                    new ModelConfiguration
-                    {
-                        Name = "gemma-2-2b-instruct",
-                        HuggingFaceId = "google/gemma-2-2b-it-GGUF",
-                        Filename = "gemma-2-2b-it-q4_k_m.gguf",
-                        ContextSize = 8192,
-                        GpuLayers = 99999,
-                        Description = "Google Gemma 2 2B Instruct model",
-                        SizeGB = 1.6,
-                        Type = "instruct",
-                        UseModelTemplate = true
-                    },
-                    new ModelConfiguration
-                    {
-                        Name = "phi-4",
-                        HuggingFaceId = "microsoft/phi-4-gguf",
-                        Filename = "phi-4-Q8_0.gguf",
-                        ContextSize = 32768,
-                        GpuLayers = 99999,
-                        Description = "Phi-4 model by Microsoft",
-                        SizeGB = 15.6,
-                        Type = "instruct",
-                        UseModelTemplate = true
-                    },
-                    new ModelConfiguration
-                    {
                         Name = "gpt-oss-20b",
                         HuggingFaceId = "ggml-org/gpt-oss-20b-GGUF",
                         Filename = "gpt-oss-20b-mxfp4.gguf",
                         ContextSize = 32768,
                         GpuLayers = 99999,
-                        Description = "GPT-OSS 20B model",
-                        SizeGB = 12.1,
-                        Type = "reasoning",
-                        UseModelTemplate = true,
-                        ResponseParsingRegex = @"<\|start\|>assistant<\|channel\|>final<\|message\|>(?<content>.*?)(?:<\|end\|>|$)"
+                        Description = "GPT-OSS 20B reasoning model with harmony format",
+                        SizeGB = 12.1
                     },
                     new ModelConfiguration
                     {
-                        Name = "LocalAI-functioncall-phi-4-v0.3",
-                        HuggingFaceId = "mudler/LocalAI-functioncall-phi-4-v0.3-Q4_K_M-GGUF",
-                        Filename = "localai-functioncall-phi-4-v0.3-q4_k_m.gguf",
+                        Name = "gpt-oss-120b",
+                        HuggingFaceId = "ggml-org/gpt-oss-120b-GGUF", 
+                        Filename = "gpt-oss-120b-mxfp4.gguf",
                         ContextSize = 32768,
                         GpuLayers = 99999,
-                        Description = "Phi-4 model for function calling by mudler",
-                        SizeGB = 8.89,
-                        Type = "instruct",
-                        UseModelTemplate = true
+                        Description = "GPT-OSS 120B reasoning model with harmony format - large variant",
+                        SizeGB = 72.5
                     }
                 }
             };
@@ -381,6 +315,34 @@ namespace SharpAI.Services
         }
 
         public List<string> GetAvailableModels()
+        {
+            // Return OpenAI-compatible model names that are supported
+            return new List<string>
+            {
+                // Direct gpt-oss models
+                "gpt-oss-20b",
+                "gpt-oss-120b",
+                
+                // OpenAI standard models that map to gpt-oss-20b
+                "gpt-4",
+                "gpt-4-turbo",
+                "gpt-4-turbo-preview",
+                "gpt-4o",
+                "gpt-4o-mini",
+                "gpt-3.5-turbo",
+                "chatgpt-4o-latest",
+                
+                // Larger models that map to gpt-oss-120b
+                "gpt-5",
+                "gpt-5-pro",
+                "gpt-4-pro",
+                "o1",
+                "o1-preview",
+                "o1-mini"
+            };
+        }
+
+        public List<string> GetInternalModels()
         {
             return _modelsConfig.Models.Select(m => m.Name).ToList();
         }

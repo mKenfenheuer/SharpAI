@@ -2,6 +2,10 @@ using System.Text.Json.Serialization;
 
 namespace SharpAI.Models
 {
+    /// <summary>
+    /// Simplified configuration for GPT-OSS models using harmony format.
+    /// All models automatically use harmony format without Jinja templates or custom parsing.
+    /// </summary>
     public class ModelConfiguration
     {
         [JsonPropertyName("name")]
@@ -24,21 +28,6 @@ namespace SharpAI.Models
 
         [JsonPropertyName("size_gb")]
         public double SizeGB { get; set; }
-
-        [JsonPropertyName("type")]
-        public string Type { get; set; } = "instruct";
-
-        [JsonPropertyName("use_model_template")]
-        public bool UseModelTemplate { get; set; } = true;
-
-        [JsonPropertyName("jinja_template_url")]
-        public string? JinjaTemplateUrl { get; set; }
-
-        [JsonPropertyName("jinja_template_raw")]
-        public string? JinjaTemplateRaw { get; set; }
-
-        [JsonPropertyName("response_parsing_regex")]
-        public string? ResponseParsingRegex { get; set; }
     }
 
     public class ModelsConfiguration

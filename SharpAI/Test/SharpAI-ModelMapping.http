@@ -1,0 +1,146 @@
+### Test Model Mapping - Standard OpenAI Models → gpt-oss-20b
+
+### Test GPT-4 mapping
+POST http://localhost:5164/v1/chat/completions
+Content-Type: application/json
+
+{
+  "model": "gpt-4",
+  "messages": [{"role": "user", "content": "What model are you running on?"}],
+  "max_tokens": 100,
+  "reasoning_effort": "medium"
+}
+
+### Test GPT-4o mapping  
+POST http://localhost:5164/v1/chat/completions
+Content-Type: application/json
+
+{
+  "model": "gpt-4o",
+  "messages": [{"role": "user", "content": "What model are you running on?"}],
+  "max_tokens": 100,
+  "reasoning_effort": "high"
+}
+
+### Test GPT-3.5-turbo mapping
+POST http://localhost:5164/v1/chat/completions
+Content-Type: application/json
+
+{
+  "model": "gpt-3.5-turbo",
+  "messages": [{"role": "user", "content": "What model are you running on?"}],
+  "max_tokens": 100
+}
+
+### Test Model Mapping - Large Models → gpt-oss-120b
+
+### Test GPT-5-pro mapping (should use gpt-oss-120b)
+POST http://localhost:5164/v1/chat/completions
+Content-Type: application/json
+
+{
+  "model": "gpt-5-pro",
+  "messages": [{"role": "user", "content": "What model are you running on?"}],
+  "max_tokens": 100,
+  "reasoning_effort": "high"
+}
+
+### Test o1-preview mapping (should use gpt-oss-120b)
+POST http://localhost:5164/v1/chat/completions
+Content-Type: application/json
+
+{
+  "model": "o1-preview",
+  "messages": [{"role": "user", "content": "What model are you running on?"}],
+  "max_tokens": 100,
+  "reasoning_effort": "high"
+}
+
+### Test o1-mini mapping (should use gpt-oss-20b)
+POST http://localhost:5164/v1/chat/completions
+Content-Type: application/json
+
+{
+  "model": "o1-mini",
+  "messages": [{"role": "user", "content": "What model are you running on?"}],
+  "max_tokens": 100,
+  "reasoning_effort": "medium"
+}
+
+### Test Direct GPT-OSS Models
+
+### Direct gpt-oss-20b
+POST http://localhost:5164/v1/chat/completions
+Content-Type: application/json
+
+{
+  "model": "gpt-oss-20b",
+  "messages": [{"role": "user", "content": "What model are you running on?"}],
+  "max_tokens": 100,
+  "reasoning_effort": "medium"
+}
+
+### Direct gpt-oss-120b
+POST http://localhost:5164/v1/chat/completions
+Content-Type: application/json
+
+{
+  "model": "gpt-oss-120b",
+  "messages": [{"role": "user", "content": "What model are you running on?"}],
+  "max_tokens": 100,
+  "reasoning_effort": "high"
+}
+
+### Test Model List (should show all supported OpenAI model names)
+GET http://localhost:5164/v1/models
+
+### Test Function Calling with Model Mapping
+POST http://localhost:5164/v1/chat/completions
+Content-Type: application/json
+
+{
+  "model": "gpt-4",
+  "messages": [
+    {"role": "user", "content": "What's the weather like in San Francisco?"}
+  ],
+  "tools": [
+    {
+      "type": "function",
+      "function": {
+        "name": "get_current_weather",
+        "description": "Get the current weather in a given location",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "location": {
+              "type": "string",
+              "description": "The city and state, e.g. San Francisco, CA"
+            },
+            "unit": {
+              "type": "string",
+              "enum": ["celsius", "fahrenheit"]
+            }
+          },
+          "required": ["location"]
+        }
+      }
+    }
+  ],
+  "tool_choice": "auto",
+  "reasoning_effort": "medium",
+  "max_tokens": 200
+}
+
+### Test Streaming with Model Mapping
+POST http://localhost:5164/v1/chat/completions
+Content-Type: application/json
+
+{
+  "model": "gpt-4o",
+  "messages": [
+    {"role": "user", "content": "Write a short poem about artificial intelligence"}
+  ],
+  "stream": true,
+  "reasoning_effort": "high",
+  "max_tokens": 200
+}

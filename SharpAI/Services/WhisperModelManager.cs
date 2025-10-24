@@ -96,6 +96,7 @@ namespace SharpAI.Services
                 "whisper-large-v1" => "large-v1",
                 "whisper-large-v2" => "large-v2",
                 "whisper-large-v3" => "large-v3",
+                "whisper-large-v3-turbo" => "large-v3-turbo",
                 _ => modelName.ToLower()
             };
         }
