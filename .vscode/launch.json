@@ -8,7 +8,7 @@
             "name": "C#: SharpAI Debug",
             "type": "dotnet",
             "request": "launch",
-            "projectPath": "${workspaceFolder}/SharpAI.csproj"
+            "projectPath": "${workspaceFolder}/SharpAI/SharpAI.csproj"
         }
 
     ]

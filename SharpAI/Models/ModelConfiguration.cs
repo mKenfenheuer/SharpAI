@@ -27,6 +27,18 @@ namespace SharpAI.Models
 
         [JsonPropertyName("type")]
         public string Type { get; set; } = "instruct";
+
+        [JsonPropertyName("use_model_template")]
+        public bool UseModelTemplate { get; set; } = true;
+
+        [JsonPropertyName("jinja_template_url")]
+        public string? JinjaTemplateUrl { get; set; }
+
+        [JsonPropertyName("jinja_template_raw")]
+        public string? JinjaTemplateRaw { get; set; }
+
+        [JsonPropertyName("response_parsing_regex")]
+        public string? ResponseParsingRegex { get; set; }
     }
 
     public class ModelsConfiguration

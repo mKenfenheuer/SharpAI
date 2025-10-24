@@ -35,12 +35,19 @@ public class LLamaSharpService
             throw new ArgumentException($"Model '{modelName}' is not available. Use /v1/models to see available models.", ex);
         }
         
-        var chatHistory = ConvertToChatHistory(request.Messages);
-        var session = new ChatSession(modelInstance.Executor!, chatHistory);
-
         var inferenceParams = CreateInferenceParams(request);
         var responseBuilder = new StringBuilder();
         var reasoningTokens = 0;
+
+        // Prepare messages with additional context
+        var allMessages = new List<ChatMessage>(request.Messages);
+
+        // Add default system prompt if none provided
+        if (!allMessages.Any(m => m.Role == ChatRole.System))
+        {
+            var defaultSystemPrompt = "You are a helpful and knowledgeable assistant.";
+            allMessages.Insert(0, new ChatMessage { Role = ChatRole.System, Content = defaultSystemPrompt });
+        }
 
         // Check if tools are available and should be used
         var shouldUseFunctions = request.Tools?.Any() == true && 
@@ -50,41 +57,36 @@ public class LLamaSharpService
         if (shouldUseFunctions)
         {
             var functionsPrompt = CreateFunctionCallingPrompt(request.Tools!);
-            chatHistory.AddMessage(AuthorRole.System, functionsPrompt);
+            allMessages.Add(new ChatMessage { Role = ChatRole.System, Content = functionsPrompt });
         }
 
         // Add reasoning effort if specified
         if (request.ReasoningEffort.HasValue)
         {
             var reasoningPrompt = GetReasoningPrompt(request.ReasoningEffort.Value);
-            chatHistory.AddMessage(AuthorRole.System, reasoningPrompt);
+            allMessages.Add(new ChatMessage { Role = ChatRole.System, Content = reasoningPrompt });
         }
 
         // Add response format instructions if specified
         if (request.ResponseFormat != null)
         {
             var formatPrompt = CreateResponseFormatPrompt(request.ResponseFormat);
-            chatHistory.AddMessage(AuthorRole.System, formatPrompt);
+            allMessages.Add(new ChatMessage { Role = ChatRole.System, Content = formatPrompt });
         }
 
-        // Add default system prompt if none provided
-        if (!request.Messages.Any(m => m.Role == ChatRole.System))
-        {
-            var defaultSystemPrompt = "You are a helpful and knowledgeable assistant.";
-            chatHistory.AddMessage(AuthorRole.System, defaultSystemPrompt);
-        }
+        // Apply Jinja template to format the prompt
+        var formattedPrompt = ApplyJinjaTemplate(allMessages, modelInstance.Template);
 
-        var lastMessage = new ChatHistory.Message(AuthorRole.User, GetLastUserMessage(request.Messages));
-
-        // remove the last user message from history to avoid duplication
-        chatHistory.Messages.Remove(chatHistory.Messages.Where(m => m.AuthorRole == AuthorRole.User && m.Content == lastMessage.Content).Last());
-
-        await foreach (var text in session.ChatAsync(lastMessage, inferenceParams))
+        // Generate response using the stateless executor
+        await foreach (var text in modelInstance.Executor!.InferAsync(formattedPrompt, inferenceParams))
         {
             responseBuilder.Append(text);
         }
 
         var responseText = responseBuilder.ToString().Trim();
+        
+        // Parse structured response format if present
+        responseText = ParseStructuredResponse(responseText, modelInstance.Configuration);
         
         // Apply response format validation and processing
         if (request.ResponseFormat != null)
@@ -137,7 +139,7 @@ public class LLamaSharpService
             },
             Usage = new TokenUsage
             {
-                PromptTokens = EstimateTokens(string.Join("", request.Messages.Select(m => m.Content?.ToString() ?? ""))),
+                PromptTokens = EstimateTokens(formattedPrompt),
                 CompletionTokens = EstimateTokens(responseText),
                 ReasoningTokens = reasoningTokens > 0 ? reasoningTokens : null,
                 TotalTokens = 0 // Will be calculated
@@ -164,12 +166,19 @@ public class LLamaSharpService
             throw new ArgumentException($"Model '{modelName}' is not available. Use /v1/models to see available models.", ex);
         }
         
-        var chatHistory = ConvertToChatHistory(request.Messages);
-        var session = new ChatSession(modelInstance.Executor!, chatHistory);
-
         var inferenceParams = CreateInferenceParams(request);
         var completionId = $"chatcmpl-{Guid.NewGuid():N}";
         var created = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+
+        // Prepare messages with additional context
+        var allMessages = new List<ChatMessage>(request.Messages);
+
+        // Add default system prompt if none provided
+        if (!allMessages.Any(m => m.Role == ChatRole.System))
+        {
+            var defaultSystemPrompt = "You are a helpful and knowledgeable assistant.";
+            allMessages.Insert(0, new ChatMessage { Role = ChatRole.System, Content = defaultSystemPrompt });
+        }
 
         // Check if tools are available and should be used
         var shouldUseFunctions = request.Tools?.Any() == true && 
@@ -179,21 +188,21 @@ public class LLamaSharpService
         if (shouldUseFunctions)
         {
             var functionsPrompt = CreateFunctionCallingPrompt(request.Tools!);
-            chatHistory.AddMessage(AuthorRole.System, functionsPrompt);
+            allMessages.Add(new ChatMessage { Role = ChatRole.System, Content = functionsPrompt });
         }
 
         // Add reasoning effort if specified
         if (request.ReasoningEffort.HasValue)
         {
             var reasoningPrompt = GetReasoningPrompt(request.ReasoningEffort.Value);
-            chatHistory.AddMessage(AuthorRole.System, reasoningPrompt);
+            allMessages.Add(new ChatMessage { Role = ChatRole.System, Content = reasoningPrompt });
         }
 
         // Add response format instructions if specified
         if (request.ResponseFormat != null)
         {
             var formatPrompt = CreateResponseFormatPrompt(request.ResponseFormat);
-            chatHistory.AddMessage(AuthorRole.System, formatPrompt);
+            allMessages.Add(new ChatMessage { Role = ChatRole.System, Content = formatPrompt });
         }
 
         // Send initial chunk
@@ -214,17 +223,53 @@ public class LLamaSharpService
             }
         };
 
+        // Apply Jinja template to format the prompt
+        var formattedPrompt = ApplyJinjaTemplate(allMessages, modelInstance.Template);
+
         var responseBuilder = new StringBuilder();
-        var lastMessage = GetLastUserMessage(request.Messages);
+        var hasStreamedContent = false;
         
-        await foreach (var text in session.ChatAsync(
-            new ChatHistory.Message(AuthorRole.User, lastMessage),
-            inferenceParams))
+        await foreach (var text in modelInstance.Executor!.InferAsync(formattedPrompt, inferenceParams))
         {
             responseBuilder.Append(text);
             
-            if (!string.IsNullOrEmpty(text))
+            // Try to detect if we have a complete structured response
+            var currentResponse = responseBuilder.ToString();
+            var parsedResponse = ParseStructuredResponse(currentResponse, modelInstance.Configuration);
+            
+            // If the parsed response is different from the raw response, we have structured content
+            if (parsedResponse != currentResponse && !string.IsNullOrEmpty(parsedResponse))
             {
+                // Stream the parsed content instead of raw content
+                if (!hasStreamedContent)
+                {
+                    // Stream the entire parsed content as chunks
+                    var words = parsedResponse.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+                    foreach (var word in words)
+                    {
+                        yield return new ChatCompletionChunk
+                        {
+                            Id = completionId,
+                            Object = CompletionObjectType.ChatCompletionChunk,
+                            Created = created,
+                            Model = request.Model,
+                            Choices = new List<ChatCompletionChunkChoice>
+                            {
+                                new ChatCompletionChunkChoice
+                                {
+                                    Index = 0,
+                                    Delta = new ChatMessage { Role = ChatRole.Assistant, Content = word + " " },
+                                    FinishReason = null
+                                }
+                            }
+                        };
+                    }
+                    hasStreamedContent = true;
+                }
+            }
+            else if (!hasStreamedContent && !string.IsNullOrEmpty(text))
+            {
+                // Stream raw content if no structured format detected yet
                 yield return new ChatCompletionChunk
                 {
                     Id = completionId,
@@ -246,6 +291,9 @@ public class LLamaSharpService
 
         // Check for tool calls in the complete response
         var completeResponse = responseBuilder.ToString();
+        
+        // Parse structured response format if present
+        completeResponse = ParseStructuredResponse(completeResponse, modelInstance.Configuration);
         
         // Apply response format validation and processing for streaming
         if (request.ResponseFormat != null)
@@ -310,7 +358,7 @@ public class LLamaSharpService
             
             finalChunk.Usage = new TokenUsage
             {
-                PromptTokens = EstimateTokens(string.Join("", request.Messages.Select(m => m.Content?.ToString() ?? ""))),
+                PromptTokens = EstimateTokens(formattedPrompt),
                 CompletionTokens = EstimateTokens(completeResponse),
                 ReasoningTokens = reasoningTokens > 0 ? reasoningTokens : null,
                 TotalTokens = 0
@@ -321,33 +369,7 @@ public class LLamaSharpService
         yield return finalChunk;
     }
 
-    private ChatHistory ConvertToChatHistory(List<ChatMessage> messages)
-    {
-        var chatHistory = new ChatHistory();
-        
-        foreach (var message in messages)
-        {
-            var role = message.Role switch
-            {
-                ChatRole.System => AuthorRole.System,
-                ChatRole.User => AuthorRole.User,
-                ChatRole.Assistant => AuthorRole.Assistant,
-                ChatRole.Tool => AuthorRole.User, // Tool messages are treated as user messages in LLama
-                _ => AuthorRole.User
-            };
 
-            var content = message.Content?.ToString() ?? "";
-            chatHistory.AddMessage(role, content);
-        }
-
-        return chatHistory;
-    }
-
-    private string GetLastUserMessage(List<ChatMessage> messages)
-    {
-        var lastUserMessage = messages.LastOrDefault(m => m.Role == ChatRole.User);
-        return lastUserMessage?.Content?.ToString() ?? "";
-    }
 
     private InferenceParams CreateInferenceParams(ChatCompletionRequest request)
     {
@@ -368,7 +390,7 @@ public class LLamaSharpService
         {
             Temperature = (float)(request.Temperature ?? 0.7),
             TopP = (float)(request.TopP ?? 1.0),
-            RepeatPenalty = repeatPenalty
+            RepeatPenalty = repeatPenalty,
         };
 
         var stopSequences = ParseStopSequences(request.Stop);
@@ -377,7 +399,8 @@ public class LLamaSharpService
         {
             MaxTokens = request.MaxCompletionTokens ?? request.MaxTokens ?? 256,
             AntiPrompts = stopSequences,
-            SamplingPipeline = samplingPipeline
+            SamplingPipeline = samplingPipeline,
+DecodeSpecialTokens = true
         };
     }
 
@@ -585,6 +608,172 @@ Only respond with function calls when you need to use a tool to answer the user'
         }
 
         return stopSequences;
+    }
+
+    private string ApplyJinjaTemplate(List<ChatMessage> messages, LLamaTemplate? template)
+    {
+        if (template == null)
+        {
+            // Fallback to the existing ConvertToChatHistory approach
+            return FormatMessagesAsPlainText(messages);
+        }
+
+        try
+        {
+            // Clear any existing messages from the template
+            template.Clear();
+
+            // Add messages to the template
+            foreach (var message in messages)
+            {
+                var role = message.Role switch
+                {
+                    ChatRole.System => "system",
+                    ChatRole.User => "user", 
+                    ChatRole.Assistant => "assistant",
+                    ChatRole.Tool => "tool",
+                    _ => "user"
+                };
+
+                var content = message.Content?.ToString() ?? "";
+                template.Add(role, content);
+            }
+
+            // Apply the template to get the formatted prompt
+            var appliedTemplate = template.Apply();
+            return System.Text.Encoding.UTF8.GetString(appliedTemplate);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to apply Jinja template, falling back to plain text formatting");
+            return FormatMessagesAsPlainText(messages);
+        }
+    }
+
+    private string FormatMessagesAsPlainText(List<ChatMessage> messages)
+    {
+        var builder = new StringBuilder();
+        
+        foreach (var message in messages)
+        {
+            var role = message.Role switch
+            {
+                ChatRole.System => "System",
+                ChatRole.User => "User",
+                ChatRole.Assistant => "Assistant", 
+                ChatRole.Tool => "Tool",
+                _ => "User"
+            };
+
+            var content = message.Content?.ToString() ?? "";
+            if (!string.IsNullOrEmpty(content))
+            {
+                builder.AppendLine($"{role}: {content}");
+            }
+        }
+
+        return builder.ToString();
+    }
+
+    private string ParseStructuredResponse(string rawResponse, ModelConfiguration? modelConfig = null)
+    {
+        try
+        {
+            // First try to use the model-specific regex if provided
+            if (modelConfig?.ResponseParsingRegex != null)
+            {
+                var customMatch = Regex.Match(rawResponse, modelConfig.ResponseParsingRegex, RegexOptions.Singleline | RegexOptions.IgnoreCase);
+                if (customMatch.Success)
+                {
+                    // If the regex has named groups, try to extract from "content" group first, then use the first capturing group
+                    if (customMatch.Groups["content"].Success)
+                    {
+                        var content = customMatch.Groups["content"].Value.Trim();
+                        _logger.LogDebug("Extracted content using custom regex with named group: {Content}", content);
+                        return content;
+                    }
+                    else if (customMatch.Groups.Count > 1)
+                    {
+                        var content = customMatch.Groups[1].Value.Trim();
+                        _logger.LogDebug("Extracted content using custom regex: {Content}", content);
+                        return content;
+                    }
+                }
+            }
+
+            // Fallback to default structured response parsing
+            return ParseDefaultStructuredResponse(rawResponse);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to parse structured response with custom regex, falling back to default parsing");
+            return ParseDefaultStructuredResponse(rawResponse);
+        }
+    }
+
+    private string ParseDefaultStructuredResponse(string rawResponse)
+    {
+        try
+        {
+            // Look for the final assistant message in the structured response
+            var pattern = @"<\|start\|>assistant<\|channel\|>final<\|message\|>(.*?)(?:<\|end\|>|$)";
+            var match = Regex.Match(rawResponse, pattern, RegexOptions.Singleline | RegexOptions.IgnoreCase);
+            
+            if (match.Success && match.Groups.Count > 1)
+            {
+                var content = match.Groups[1].Value.Trim();
+                _logger.LogDebug("Extracted structured response content: {Content}", content);
+                return content;
+            }
+
+            // Fallback: look for any assistant message with any channel
+            pattern = @"<\|start\|>assistant<\|channel\|>[^<]*<\|message\|>(.*?)(?:<\|end\|>|$)";
+            match = Regex.Match(rawResponse, pattern, RegexOptions.Singleline | RegexOptions.IgnoreCase);
+            
+            if (match.Success && match.Groups.Count > 1)
+            {
+                var content = match.Groups[1].Value.Trim();
+                _logger.LogDebug("Extracted fallback assistant response: {Content}", content);
+                return content;
+            }
+
+            // Alternative format: Look for assistant messages without channel
+            pattern = @"<\|start\|>assistant<\|message\|>(.*?)(?:<\|end\|>|$)";
+            match = Regex.Match(rawResponse, pattern, RegexOptions.Singleline | RegexOptions.IgnoreCase);
+            
+            if (match.Success && match.Groups.Count > 1)
+            {
+                var content = match.Groups[1].Value.Trim();
+                _logger.LogDebug("Extracted simple assistant response: {Content}", content);
+                return content;
+            }
+
+            // Check if the response contains structured tokens but extract everything after the last assistant start
+            if (rawResponse.Contains("<|start|>assistant"))
+            {
+                var lastAssistantIndex = rawResponse.LastIndexOf("<|start|>assistant", StringComparison.OrdinalIgnoreCase);
+                if (lastAssistantIndex >= 0)
+                {
+                    var afterAssistant = rawResponse.Substring(lastAssistantIndex);
+                    var messageMatch = Regex.Match(afterAssistant, @"<\|message\|>(.*?)(?:<\|end\|>|$)", RegexOptions.Singleline | RegexOptions.IgnoreCase);
+                    if (messageMatch.Success && messageMatch.Groups.Count > 1)
+                    {
+                        var content = messageMatch.Groups[1].Value.Trim();
+                        _logger.LogDebug("Extracted last assistant message: {Content}", content);
+                        return content;
+                    }
+                }
+            }
+
+            // If no structured format found, return the original response
+            _logger.LogDebug("No structured response format detected, returning original response");
+            return rawResponse;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to parse structured response, returning original");
+            return rawResponse;
+        }
     }
 
     public void Dispose()

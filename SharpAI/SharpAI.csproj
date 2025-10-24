@@ -13,21 +13,20 @@
   <ItemGroup>
     <PackageReference Include="CommunityToolkit.HighPerformance" Version="8.4.0" />
     <PackageReference Include="FFMpegCore" Version="5.3.0" />
+    <PackageReference Include="LLamaSharp" Version="0.25.0" />
     <PackageReference Include="Microsoft.AspNetCore.OpenApi" Version="9.0.0" />
     <PackageReference Include="Whisper.net" Version="1.8.1" />
     <PackageReference Include="Whisper.net.Runtime" Version="1.8.1" />
   </ItemGroup>
 
   <ItemGroup> 
-  <Content Include="runtimes\**"> 
-    <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory> 
-  </Content> 
-</ItemGroup>
- 
+    <Content Include="runtimes\**"> 
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory> 
+    </Content>
+  </ItemGroup>
+
   <ItemGroup>
-    <Reference Include="LLamaSharp">
-      <HintPath>Libs\LLamaSharp.dll</HintPath>
-    </Reference>
+    <ProjectReference Include="..\LLamaSharp\LLama\LLamaSharp.csproj" />
   </ItemGroup>
   <PropertyGroup>
     <ErrorOnDuplicatePublishOutputFiles>false</ErrorOnDuplicatePublishOutputFiles>
