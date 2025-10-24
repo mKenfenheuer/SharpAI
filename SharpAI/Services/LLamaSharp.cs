@@ -35,7 +35,7 @@ public class LLamaSharpService
             throw new ArgumentException($"Model '{modelName}' is not available. Use /v1/models to see available models.", ex);
         }
         
-        var inferenceParams = CreateInferenceParams(request);
+        var inferenceParams = CreateInferenceParams(request, modelInstance);
         var responseBuilder = new StringBuilder();
         var reasoningTokens = 0;
 
@@ -166,7 +166,7 @@ public class LLamaSharpService
             throw new ArgumentException($"Model '{modelName}' is not available. Use /v1/models to see available models.", ex);
         }
         
-        var inferenceParams = CreateInferenceParams(request);
+        var inferenceParams = CreateInferenceParams(request, modelInstance);
         var completionId = $"chatcmpl-{Guid.NewGuid():N}";
         var created = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
 
@@ -371,7 +371,7 @@ public class LLamaSharpService
 
 
 
-    private InferenceParams CreateInferenceParams(ChatCompletionRequest request)
+    private InferenceParams CreateInferenceParams(ChatCompletionRequest request, ModelInstance modelInstance)
     {
         var repeatPenalty = 1.0f;
         
@@ -391,17 +391,108 @@ public class LLamaSharpService
             Temperature = (float)(request.Temperature ?? 0.7),
             TopP = (float)(request.TopP ?? 1.0),
             RepeatPenalty = repeatPenalty,
+            
         };
 
-        var stopSequences = ParseStopSequences(request.Stop);
+        // Get stop sequences from model EOS token and request
+        var stopSequences = GetStopSequencesFromModel(request, modelInstance);
 
         return new InferenceParams
         {
-            MaxTokens = request.MaxCompletionTokens ?? request.MaxTokens ?? 256,
+            MaxTokens = request.MaxCompletionTokens ?? request.MaxTokens ?? int.MaxValue,
             AntiPrompts = stopSequences,
             SamplingPipeline = samplingPipeline,
-DecodeSpecialTokens = true
+            DecodeSpecialTokens = true
         };
+    }
+
+    private List<string> GetStopSequencesFromModel(ChatCompletionRequest request, ModelInstance modelInstance)
+    {
+        var stopSequences = new List<string>();
+
+        try
+        {
+            // Try to get the EOS token from the model
+            if (modelInstance.Weights != null)
+            {
+                // Get the EOS token and convert it to string
+                var eosToken = modelInstance.Weights.NativeHandle.Vocab.EOS;
+                if (eosToken.HasValue)
+                {
+                    try
+                    {
+                        var eosTokenString = modelInstance.Weights.NativeHandle.Vocab.LLamaTokenToString(eosToken, true);
+                        if (!string.IsNullOrEmpty(eosTokenString))
+                        {
+                            stopSequences.Add(eosTokenString);
+                            _logger.LogDebug("Added EOS token as stop sequence: {EosToken}", eosTokenString);
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogWarning(ex, "Failed to convert EOS token to string");
+                    }
+                }
+
+                // Also try to get BOS token (sometimes relevant for stopping)
+                try
+                {
+                    var bosToken = modelInstance.Weights.NativeHandle.Vocab.BOS;
+                    if (bosToken.HasValue)
+                    {
+                        var bosTokenString = modelInstance.Weights.NativeHandle.Vocab.LLamaTokenToString(bosToken, true);
+                        if (!string.IsNullOrEmpty(bosTokenString) && !stopSequences.Contains(bosTokenString))
+                        {
+                            // Only add BOS as stop sequence if it's different from EOS and seems relevant
+                            if (bosToken != eosToken)
+                            {
+                                _logger.LogDebug("Found BOS token: {BosToken}", bosTokenString);
+                            }
+                        }
+                    }
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogDebug(ex, "Failed to get BOS token from model");
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to get stop sequences from model, using fallback");
+        }
+
+        // Add any custom stop sequences from the request
+        if (request.Stop != null)
+        {
+            if (request.Stop is string singleStop)
+            {
+                stopSequences.Add(singleStop);
+            }
+            else if (request.Stop is JsonElement jsonElement && jsonElement.ValueKind == JsonValueKind.Array)
+            {
+                foreach (var element in jsonElement.EnumerateArray())
+                {
+                    if (element.ValueKind == JsonValueKind.String)
+                    {
+                        var stopSeq = element.GetString();
+                        if (!string.IsNullOrEmpty(stopSeq))
+                        {
+                            stopSequences.Add(stopSeq);
+                        }
+                    }
+                }
+            }
+        }
+
+        // Add common fallback stop sequences if we didn't find any
+        if (stopSequences.Count == 0)
+        {
+            stopSequences.AddRange(new[] { "<|end|>", "<|eot_id|>", "<|im_end|>", "<|endoftext|>" });
+            _logger.LogDebug("Using fallback stop sequences as no model-specific tokens were found");
+        }
+
+        return stopSequences.Distinct().ToList();
     }
 
     private int EstimateTokens(string text)
@@ -567,12 +658,12 @@ Only respond with function calls when you need to use a tool to answer the user'
             if (jsonMatch.Success)
             {
                 var jsonText = jsonMatch.Value;
-                
+
                 // Validate that it's proper JSON
                 JsonDocument.Parse(jsonText);
                 return jsonText;
             }
-            
+
             // If no JSON found, try to parse the entire response as JSON
             JsonDocument.Parse(responseText);
             return responseText;
@@ -584,32 +675,7 @@ Only respond with function calls when you need to use a tool to answer the user'
             return $"{{\"response\": {escapedText}}}";
         }
     }
-
-    private List<string> ParseStopSequences(object? stop)
-    {
-        var stopSequences = new List<string> { "User:", "\nUser:" };
-
-        if (stop != null)
-        {
-            if (stop is string singleStop)
-            {
-                stopSequences.Add(singleStop);
-            }
-            else if (stop is JsonElement jsonElement && jsonElement.ValueKind == JsonValueKind.Array)
-            {
-                foreach (var element in jsonElement.EnumerateArray())
-                {
-                    if (element.ValueKind == JsonValueKind.String)
-                    {
-                        stopSequences.Add(element.GetString() ?? "");
-                    }
-                }
-            }
-        }
-
-        return stopSequences;
-    }
-
+    
     private string ApplyJinjaTemplate(List<ChatMessage> messages, LLamaTemplate? template)
     {
         if (template == null)
