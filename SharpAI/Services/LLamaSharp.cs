@@ -33,6 +33,19 @@ public class LLamaSharpService : IDisposable
         var requestedModel = request.Model ?? "gpt-4";
         _logger.LogInformation("Requested model: {RequestedModel}", requestedModel);
 
+        // Validate tool definitions if provided
+        if (request.Tools?.Any() == true)
+        {
+            var validationResults = FunctionSchemaValidator.ValidateToolDefinitions(request.Tools);
+            if (validationResults.Any())
+            {
+                var errorMessage = "Invalid function definitions: " + 
+                    string.Join("; ", validationResults.SelectMany(kvp => kvp.Value.Select(err => $"{kvp.Key}: {err}")));
+                _logger.LogError("Tool validation failed: {ValidationErrors}", errorMessage);
+                throw new ArgumentException(errorMessage);
+            }
+        }
+
         ModelInstance modelInstance;
         try
         {
@@ -117,7 +130,7 @@ public class LLamaSharpService : IDisposable
             },
             Usage = new TokenUsage
             {
-                PromptTokens = LLamaUtilities.EstimateTokens(_harmonyFormatter.FormatPrompt(allMessages, request.Tools?.Any() == true, request.ReasoningEffort ?? ReasoningEffortLevel.Medium, request.Tools)),
+                PromptTokens = LLamaUtilities.EstimateTokens(_harmonyFormatter.FormatPrompt(allMessages, request.Tools?.Any() == true, request.ReasoningEffort ?? ReasoningEffortLevel.Medium, request.Tools, request.ResponseFormat)),
                 CompletionTokens = LLamaUtilities.EstimateTokens(parsedResponse.Content ?? ""),
                 ReasoningTokens = reasoningTokens > 0 ? reasoningTokens : null,
                 TotalTokens = 0 // Will be calculated
@@ -132,6 +145,19 @@ public class LLamaSharpService : IDisposable
     {
         var requestedModel = request.Model ?? "gpt-4";
         _logger.LogInformation("Requested model for streaming: {RequestedModel}", requestedModel);
+        
+        // Validate tool definitions if provided
+        if (request.Tools?.Any() == true)
+        {
+            var validationResults = FunctionSchemaValidator.ValidateToolDefinitions(request.Tools);
+            if (validationResults.Any())
+            {
+                var errorMessage = "Invalid function definitions: " + 
+                    string.Join("; ", validationResults.SelectMany(kvp => kvp.Value.Select(err => $"{kvp.Key}: {err}")));
+                _logger.LogError("Tool validation failed: {ValidationErrors}", errorMessage);
+                throw new ArgumentException(errorMessage);
+            }
+        }
         
         ModelInstance modelInstance;
         try

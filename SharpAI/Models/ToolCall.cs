@@ -12,6 +12,10 @@ namespace SharpAI.Models
 
         [JsonPropertyName("function")]
         public FunctionCall? Function { get; set; }
+
+        // For streaming compatibility, some responses might include call_id
+        [JsonPropertyName("call_id")]
+        public string? CallId { get; set; }
     }
 
     public class FunctionCall

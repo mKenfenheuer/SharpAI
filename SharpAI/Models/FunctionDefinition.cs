@@ -11,6 +11,9 @@ namespace SharpAI.Models
         public string? Description { get; set; }
 
         [JsonPropertyName("parameters")]
-        public object? Parameters { get; set; } // JSON schema
+        public FunctionParameters? Parameters { get; set; } // JSON schema
+
+        [JsonPropertyName("strict")]
+        public bool? Strict { get; set; }
     }
 }

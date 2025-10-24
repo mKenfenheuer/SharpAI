@@ -12,7 +12,7 @@ public class HarmonyFormatter
         _logger = logger;
     }
 
-    public string FormatPrompt(List<ChatMessage> messages, bool hasFunctions, ReasoningEffortLevel reasoningEffort, List<ToolDefinition>? tools = null)
+    public string FormatPrompt(List<ChatMessage> messages, bool hasFunctions, ReasoningEffortLevel reasoningEffort, List<ToolDefinition>? tools = null, ResponseFormat? responseFormat = null)
     {
         var prompt = new StringBuilder();
 
@@ -47,6 +47,13 @@ public class HarmonyFormatter
         {
             prompt.AppendLine();
             prompt.AppendLine(CreateToolsDefinition(tools));
+        }
+
+        // Add response format definition if specified
+        if (responseFormat != null)
+        {
+            prompt.AppendLine();
+            prompt.AppendLine(CreateResponseFormatDefinition(responseFormat));
         }
 
         prompt.AppendLine("<|end|>");
@@ -125,71 +132,66 @@ public class HarmonyFormatter
         return toolsBuilder.ToString();
     }
 
-    private string ConvertParametersToTypeScript(object? parameters)
+    private string ConvertParametersToTypeScript(FunctionParameters? parameters)
     {
         if (parameters == null) return "";
 
         try
         {
-            var jsonElement = System.Text.Json.JsonSerializer.Deserialize<System.Text.Json.JsonElement>(parameters.ToString() ?? "");
+            var tsBuilder = new StringBuilder();
+            tsBuilder.Append("{\n");
             
-            if (jsonElement.ValueKind == System.Text.Json.JsonValueKind.Object && jsonElement.TryGetProperty("properties", out var properties))
+            var props = new List<string>();
+            
+            if (parameters.Properties != null)
             {
-                var tsBuilder = new StringBuilder();
-                tsBuilder.Append("{");
-                
-                var props = new List<string>();
-                foreach (var prop in properties.EnumerateObject())
+                foreach (var (propName, propSchema) in parameters.Properties)
                 {
-                    var propName = prop.Name;
-                    var propDef = prop.Value;
-                    
-                    var tsType = "any";
-                    var description = "";
+                    var tsType = ConvertTypeToTypeScript(propSchema);
+                    var isRequired = parameters.Required?.Contains(propName) == true;
+                    var isOptional = !isRequired;
 
-                    if (propDef.TryGetProperty("type", out var typeElement))
+                    var propDeclaration = isOptional ? $"{propName}?" : propName;
+                    
+                    if (!string.IsNullOrEmpty(propSchema.Description))
                     {
-                        tsType = typeElement.GetString() switch
+                        // Handle multi-line type definitions (for nested objects)
+                        if (tsType.Contains('\n'))
                         {
-                            "string" => "string",
-                            "number" => "number",
-                            "integer" => "number",
-                            "boolean" => "boolean",
-                            "array" => "any[]",
-                            "object" => "any",
-                            _ => "any"
-                        };
-                    }
-
-                    if (propDef.TryGetProperty("description", out var descElement))
-                    {
-                        description = descElement.GetString() ?? "";
-                    }
-
-                    if (propDef.TryGetProperty("enum", out var enumElement))
-                    {
-                        var enumValues = enumElement.EnumerateArray()
-                            .Select(e => $"\"{e.GetString()}\"")
-                            .ToArray();
-                        tsType = string.Join(" | ", enumValues);
-                    }
-
-                    var propDeclaration = $"{propName}?"; // Always optional for simplicity
-                    
-                    if (!string.IsNullOrEmpty(description))
-                    {
-                        props.Add($"\n// {description}\n{propDeclaration}: {tsType}");
+                            // Indent the nested object properly
+                            var indentedType = string.Join("\n", tsType.Split('\n').Select(line => 
+                                string.IsNullOrWhiteSpace(line) ? line : $"  {line}"));
+                            props.Add($"// {propSchema.Description}\n{propDeclaration}: {indentedType}");
+                        }
+                        else
+                        {
+                            props.Add($"// {propSchema.Description}\n{propDeclaration}: {tsType}");
+                        }
                     }
                     else
                     {
-                        props.Add($"{propDeclaration}: {tsType}");
+                        // Handle multi-line type definitions (for nested objects)
+                        if (tsType.Contains('\n'))
+                        {
+                            var indentedType = string.Join("\n", tsType.Split('\n').Select(line => 
+                                string.IsNullOrWhiteSpace(line) ? line : $"  {line}"));
+                            props.Add($"{propDeclaration}: {indentedType}");
+                        }
+                        else
+                        {
+                            props.Add($"{propDeclaration}: {tsType}");
+                        }
                     }
                 }
-                
-                tsBuilder.Append(string.Join(",\n", props));
-                tsBuilder.Append("\n}");
-                return tsBuilder.ToString();
             }
+            
+            if (props.Count > 0)
+            {
+                tsBuilder.Append(string.Join(",\n", props));
+            }
+            
+            tsBuilder.Append("\n}");
+            return tsBuilder.ToString();
         }
         catch (Exception ex)
         {
@@ -197,6 +199,278 @@ public class HarmonyFormatter
         }
 
         return "";
+    }
+
+    private string ConvertTypeToTypeScript(PropertySchema schema)
+    {
+        if (schema.Enum != null && schema.Enum.Count > 0)
+        {
+            var enumValues = schema.Enum.Select(e => $"\"{e}\"").ToArray();
+            return string.Join(" | ", enumValues);
+        }
+
+        if (schema.Type is string typeString)
+        {
+            return typeString switch
+            {
+                "string" => "string",
+                "number" => "number", 
+                "integer" => "number",
+                "boolean" => "boolean",
+                "array" => schema.Items != null ? $"{ConvertTypeToTypeScript(schema.Items)}[]" : "any[]",
+                "object" => ConvertNestedObjectToTypeScript(schema),
+                _ => "any"
+            };
+        }
+        
+        // Handle union types like ["string", "null"]
+        if (schema.Type is System.Text.Json.JsonElement jsonElement && jsonElement.ValueKind == System.Text.Json.JsonValueKind.Array)
+        {
+            var types = new List<string>();
+            foreach (var typeElement in jsonElement.EnumerateArray())
+            {
+                var typeStr = typeElement.GetString();
+                if (typeStr == "null")
+                {
+                    continue; // Handle null in optional parameters
+                }
+                types.Add(typeStr switch
+                {
+                    "string" => "string",
+                    "number" => "number",
+                    "integer" => "number", 
+                    "boolean" => "boolean",
+                    "object" => ConvertNestedObjectToTypeScript(schema),
+                    _ => "any"
+                });
+            }
+            return types.Count > 0 ? string.Join(" | ", types) : "any";
+        }
+
+        return "any";
+    }
+
+    private string ConvertNestedObjectToTypeScript(PropertySchema schema)
+    {
+        if (schema.Properties == null || !schema.Properties.Any())
+        {
+            return "any";
+        }
+
+        var nestedBuilder = new StringBuilder();
+        nestedBuilder.Append("{\n");
+        
+        var nestedProps = new List<string>();
+        
+        foreach (var (propName, propSchema) in schema.Properties)
+        {
+            var tsType = ConvertTypeToTypeScript(propSchema);
+            var isRequired = schema.Required?.Contains(propName) == true;
+            var isOptional = !isRequired;
+
+            var propDeclaration = isOptional ? $"  {propName}?" : $"  {propName}";
+            
+            if (!string.IsNullOrEmpty(propSchema.Description))
+            {
+                nestedProps.Add($"  // {propSchema.Description}\n  {propDeclaration}: {tsType}");
+            }
+            else
+            {
+                nestedProps.Add($"  {propDeclaration}: {tsType}");
+            }
+        }
+        
+        if (nestedProps.Count > 0)
+        {
+            nestedBuilder.Append(string.Join(",\n", nestedProps));
+        }
+        
+        nestedBuilder.Append("\n}");
+        return nestedBuilder.ToString();
+    }
+
+    private string CreateResponseFormatDefinition(ResponseFormat responseFormat)
+    {
+        var formatBuilder = new StringBuilder();
+        formatBuilder.AppendLine("# Response Formats");
+        formatBuilder.AppendLine();
+
+        if (responseFormat.Type == ResponseFormatType.JsonSchema && responseFormat.JsonSchema != null)
+        {
+            var schema = responseFormat.JsonSchema;
+            formatBuilder.AppendLine($"## {schema.Name}");
+            formatBuilder.AppendLine();
+
+            // Add description if available
+            if (!string.IsNullOrEmpty(schema.Description))
+            {
+                formatBuilder.AppendLine($"// {schema.Description}");
+            }
+
+            // Convert schema to JSON string
+            var schemaJson = ConvertSchemaToJson(schema.Schema);
+            formatBuilder.AppendLine(schemaJson);
+        }
+        else if (responseFormat.Type == ResponseFormatType.JsonObject)
+        {
+            formatBuilder.AppendLine("## json_object");
+            formatBuilder.AppendLine();
+            formatBuilder.AppendLine("// Response must be a valid JSON object");
+            formatBuilder.AppendLine("{\"type\":\"object\"}");
+        }
+
+        return formatBuilder.ToString();
+    }
+
+    private string ConvertSchemaToJson(object? schema)
+    {
+        if (schema == null)
+        {
+            return "{\"type\":\"object\"}";
+        }
+
+        try
+        {
+            // If it's already a JSON string, return as-is
+            if (schema is string jsonString)
+            {
+                return jsonString;
+            }
+
+            // If it's a FunctionParameters object, convert it properly
+            if (schema is FunctionParameters functionParams)
+            {
+                return ConvertFunctionParametersToJsonSchema(functionParams);
+            }
+
+            // Otherwise, serialize it to JSON
+            return System.Text.Json.JsonSerializer.Serialize(schema, new System.Text.Json.JsonSerializerOptions
+            {
+                WriteIndented = false
+            });
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to convert schema to JSON");
+            return "{\"type\":\"object\"}";
+        }
+    }
+
+    private string ConvertFunctionParametersToJsonSchema(FunctionParameters parameters)
+    {
+        var schema = new Dictionary<string, object>
+        {
+            ["type"] = parameters.Type
+        };
+
+        if (parameters.Properties != null && parameters.Properties.Any())
+        {
+            var properties = new Dictionary<string, object>();
+            foreach (var (key, value) in parameters.Properties)
+            {
+                properties[key] = ConvertPropertySchemaToJson(value);
+            }
+            schema["properties"] = properties;
+        }
+
+        if (parameters.Required != null && parameters.Required.Any())
+        {
+            schema["required"] = parameters.Required;
+        }
+
+        schema["additionalProperties"] = parameters.AdditionalProperties;
+
+        if (!string.IsNullOrEmpty(parameters.Description))
+        {
+            schema["description"] = parameters.Description;
+        }
+
+        return System.Text.Json.JsonSerializer.Serialize(schema, new System.Text.Json.JsonSerializerOptions
+        {
+            WriteIndented = false
+        });
+    }
+
+    private object ConvertPropertySchemaToJson(PropertySchema propertySchema)
+    {
+        var property = new Dictionary<string, object>();
+
+        if (propertySchema.Type != null)
+        {
+            property["type"] = propertySchema.Type;
+        }
+
+        if (!string.IsNullOrEmpty(propertySchema.Description))
+        {
+            property["description"] = propertySchema.Description;
+        }
+
+        if (propertySchema.Enum != null && propertySchema.Enum.Any())
+        {
+            property["enum"] = propertySchema.Enum;
+        }
+
+        if (propertySchema.Items != null)
+        {
+            property["items"] = ConvertPropertySchemaToJson(propertySchema.Items);
+        }
+
+        if (propertySchema.Properties != null && propertySchema.Properties.Any())
+        {
+            var nestedProperties = new Dictionary<string, object>();
+            foreach (var (key, value) in propertySchema.Properties)
+            {
+                nestedProperties[key] = ConvertPropertySchemaToJson(value);
+            }
+            property["properties"] = nestedProperties;
+
+            if (propertySchema.Required != null && propertySchema.Required.Any())
+            {
+                property["required"] = propertySchema.Required;
+            }
+
+            if (propertySchema.AdditionalProperties.HasValue)
+            {
+                property["additionalProperties"] = propertySchema.AdditionalProperties.Value;
+            }
+        }
+
+        if (propertySchema.Default != null)
+        {
+            property["default"] = propertySchema.Default;
+        }
+
+        if (propertySchema.Minimum.HasValue)
+        {
+            property["minimum"] = propertySchema.Minimum.Value;
+        }
+
+        if (propertySchema.Maximum.HasValue)
+        {
+            property["maximum"] = propertySchema.Maximum.Value;
+        }
+
+        if (propertySchema.MinLength.HasValue)
+        {
+            property["minLength"] = propertySchema.MinLength.Value;
+        }
+
+        if (propertySchema.MaxLength.HasValue)
+        {
+            property["maxLength"] = propertySchema.MaxLength.Value;
+        }
+
+        if (!string.IsNullOrEmpty(propertySchema.Pattern))
+        {
+            property["pattern"] = propertySchema.Pattern;
+        }
+
+        if (!string.IsNullOrEmpty(propertySchema.Format))
+        {
+            property["format"] = propertySchema.Format;
+        }
+
+        return property;
     }
 
     private string GetToolName(ChatMessage message)

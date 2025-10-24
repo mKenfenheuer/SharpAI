@@ -41,7 +41,8 @@ public class StreamingInferenceEngine
             messages, 
             shouldUseFunctions, 
             request.ReasoningEffort ?? ReasoningEffortLevel.Medium, 
-            request.Tools);
+            request.Tools,
+            request.ResponseFormat);
 
         _logger.LogDebug("Formatted prompt: {Prompt}", formattedPrompt);
 

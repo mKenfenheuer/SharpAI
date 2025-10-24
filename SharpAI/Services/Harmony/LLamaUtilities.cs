@@ -38,14 +38,22 @@ public static class LLamaUtilities
 
         foreach (var harmonyCall in harmonyToolCalls)
         {
+            // Generate proper call ID according to OpenAI format
+            var callId = !string.IsNullOrEmpty(harmonyCall.Id) 
+                ? harmonyCall.Id 
+                : $"call_{Guid.NewGuid():N}";
+
             var toolCall = new ToolCall
             {
-                Id = harmonyCall.Id ?? $"call_{Guid.NewGuid():N}",
+                Id = callId,
+                CallId = callId, // For streaming compatibility
                 Type = ToolType.Function,
                 Function = new FunctionCall
                 {
                     Name = harmonyCall.Name,
-                    Arguments = harmonyCall.Arguments ?? "{}"
+                    Arguments = !string.IsNullOrEmpty(harmonyCall.Arguments) 
+                        ? harmonyCall.Arguments 
+                        : "{}"
                 }
             };
 
@@ -97,12 +105,33 @@ public static class LLamaUtilities
             repeatPenalty = (float)(1.0 + Math.Abs(request.PresencePenalty.Value));
         }
 
+        // Check if we need JSON grammar for structured output
+        LLama.Sampling.Grammar? jsonGrammar = null;
+        if (request.ResponseFormat?.Type == ResponseFormatType.JsonObject || 
+            request.ResponseFormat?.Type == ResponseFormatType.JsonSchema)
+        {
+            try
+            {
+                var grammarText = GetJsonGrammar();
+                if (!string.IsNullOrEmpty(grammarText))
+                {
+                    jsonGrammar = new LLama.Sampling.Grammar(grammarText, "root");
+                }
+            }
+            catch (Exception ex)
+            {
+                // Log warning but continue without grammar
+                System.Console.WriteLine($"Warning: Failed to load JSON grammar: {ex.Message}");
+            }
+        }
+
         var samplingPipeline = new DefaultSamplingPipeline()
         {
             Temperature = (float)(request.Temperature ?? 0.7),
             TopP = (float)(request.TopP ?? 1.0),
             RepeatPenalty = repeatPenalty,
-            PreventEOS = false
+            PreventEOS = false,
+            Grammar = jsonGrammar
         };
 
         var inferenceParams = new InferenceParams
@@ -124,5 +153,38 @@ public static class LLamaUtilities
     public static long GetCurrentUnixTimestamp()
     {
         return DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+    }
+
+    private static string GetJsonGrammar()
+    {
+        // Inline JSON grammar for structured output
+        // This is based on the standard JSON grammar from LLamaSharp examples
+        return @"
+root   ::= object
+value  ::= object | array | string | number | (""true"" | ""false"" | ""null"") ws
+
+object ::=
+  ""{"" ws (
+            string "":"" ws value
+    ("","" ws string "":"" ws value)*
+  )? ""}"" ws
+
+array  ::=
+  ""["" ws (
+            value
+    ("","" ws value)*
+  )? ""]"" ws
+
+string ::=
+  '""' (
+    [^""\\\x7F\x00-\x1F] |
+    ""\\"" ([""\\bfnrt] | ""u"" [0-9a-fA-F]{4}) # escapes
+  )* '""' ws
+
+number ::= (""-""? ([0-9] | [1-9] [0-9]{0,15})) (""."" [0-9]+)? ([eE] [-+]? [0-9] [1-9]{0,15})? ws
+
+# Optional space: by convention, applied in this grammar after literal chars when allowed
+ws ::= | "" "" | ""\n"" [ \t]{0,20}
+".Trim();
     }
 }
