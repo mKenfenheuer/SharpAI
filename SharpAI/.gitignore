@@ -431,3 +431,4 @@ app.db
 app.db-shm
 app.db-wal
 Data/Models/**
+Data/**
