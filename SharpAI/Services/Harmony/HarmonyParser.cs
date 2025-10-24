@@ -63,8 +63,10 @@ public class HarmonyParser
             }
         }
 
-        // Extract tool calls from commentary channel
-        var toolCalls = messages.Where(m => m.Channel == "commentary" && !string.IsNullOrEmpty(m.Recipient)).ToList();
+        // Extract tool calls from commentary and analysis channels
+        var toolCalls = messages.Where(m => 
+            (m.Channel == "commentary" || m.Channel == "analysis") && 
+            !string.IsNullOrEmpty(m.Recipient)).ToList();
         var newToolCalls = new List<HarmonyToolCall>();
         
         foreach (var toolCall in toolCalls)
@@ -74,6 +76,23 @@ public class HarmonyParser
                 var harmonyCall = new HarmonyToolCall
                 {
                     Name = toolCall.Recipient.Substring("functions.".Length),
+                    Arguments = toolCall.Content,
+                    Recipient = toolCall.Recipient
+                };
+
+                // Check if this is a new tool call
+                if (!state.ToolCalls.Any(tc => tc.Name == harmonyCall.Name && tc.Arguments == harmonyCall.Arguments))
+                {
+                    state.ToolCalls.Add(harmonyCall);
+                    newToolCalls.Add(harmonyCall);
+                    state.HasToolCall = true;
+                }
+            }
+            else if (toolCall.Recipient?.StartsWith("browser.") == true)
+            {
+                var harmonyCall = new HarmonyToolCall
+                {
+                    Name = toolCall.Recipient.Substring("browser.".Length),
                     Arguments = toolCall.Content,
                     Recipient = toolCall.Recipient
                 };

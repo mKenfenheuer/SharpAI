@@ -12,15 +12,18 @@ public class StreamingInferenceEngine
     private readonly ILogger<StreamingInferenceEngine> _logger;
     private readonly HarmonyFormatter _formatter;
     private readonly HarmonyParser _parser;
+    private readonly BrowserToolHandler _browserHandler;
 
     public StreamingInferenceEngine(
         ILogger<StreamingInferenceEngine> logger,
         HarmonyFormatter formatter,
-        HarmonyParser parser)
+        HarmonyParser parser,
+        BrowserToolHandler browserHandler)
     {
         _logger = logger;
         _formatter = formatter;
         _parser = parser;
+        _browserHandler = browserHandler;
     }
 
     public async IAsyncEnumerable<StreamingInferenceResult> GenerateStreamAsync(
@@ -89,6 +92,12 @@ public class StreamingInferenceEngine
 
         var parsedResponse = _parser.ParseCompleteResponse(completeResponse);
 
+        // Handle browser tool calls internally
+        if (parsedResponse.ToolCalls.Any(tc => BrowserToolHandler.IsBrowserToolCall(tc.Recipient)))
+        {
+            await HandleBrowserToolCallsAsync(parsedResponse);
+        }
+
         // Apply response format validation if needed
         if (request.ResponseFormat != null)
         {
@@ -138,6 +147,40 @@ public class StreamingInferenceEngine
         }
 
         return content;
+    }
+
+    private async Task HandleBrowserToolCallsAsync(ParsedResponse parsedResponse)
+    {
+        var browserToolCalls = parsedResponse.ToolCalls
+            .Where(tc => BrowserToolHandler.IsBrowserToolCall(tc.Recipient))
+            .ToList();
+
+        foreach (var toolCall in browserToolCalls)
+        {
+            try
+            {
+                var functionName = BrowserToolHandler.ExtractBrowserFunction(toolCall.Recipient);
+                var result = await _browserHandler.HandleBrowserToolCall(functionName, toolCall.Arguments);
+                
+                // Update the content with browser tool results
+                if (!string.IsNullOrEmpty(result))
+                {
+                    parsedResponse.Content += $"\n\n{result}";
+                }
+
+                _logger.LogInformation("Browser tool call executed: {Function}", functionName);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error executing browser tool call: {Recipient}", toolCall.Recipient);
+                parsedResponse.Content += $"\n\nError executing browser tool: {ex.Message}";
+            }
+        }
+
+        // Remove browser tool calls from the response since they're handled internally
+        parsedResponse.ToolCalls = parsedResponse.ToolCalls
+            .Where(tc => !BrowserToolHandler.IsBrowserToolCall(tc.Recipient))
+            .ToList();
     }
 }
 

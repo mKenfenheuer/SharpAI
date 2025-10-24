@@ -23,6 +23,51 @@ public class HarmonyFormatter
         prompt.AppendLine();
         prompt.AppendLine($"Reasoning: {reasoningEffort.ToString().ToLower()}");
         prompt.AppendLine();
+        
+        // Add browser tool definition
+        prompt.AppendLine("# Tools");
+        prompt.AppendLine();
+        prompt.AppendLine("## browser");
+        prompt.AppendLine();
+        prompt.AppendLine("// Tool for browsing.");
+        prompt.AppendLine("// The `cursor` appears in brackets before each browsing display: `[{cursor}]`.");
+        prompt.AppendLine("// Cite information from the tool using the following format:");
+        prompt.AppendLine("// `【{cursor}†L{line_start}(-L{line_end})?】`, for example: `【6†L9-L11】` or `【8†L3】`.");
+        prompt.AppendLine("// Do not quote more than 10 words directly from the tool output.");
+        prompt.AppendLine("// sources=web (default: web)");
+        prompt.AppendLine("namespace browser {");
+        prompt.AppendLine();
+        prompt.AppendLine("// Searches for information related to `query` and displays `topn` results.");
+        prompt.AppendLine("type search = (_: {");
+        prompt.AppendLine("query: string,");
+        prompt.AppendLine("topn?: number, // default: 10");
+        prompt.AppendLine("source?: string,");
+        prompt.AppendLine("}) => any;");
+        prompt.AppendLine();
+        prompt.AppendLine("// Opens the link `id` from the page indicated by `cursor` starting at line number `loc`, showing `num_lines` lines.");
+        prompt.AppendLine("// Valid link ids are displayed with the formatting: `【{id}†.*】`.");
+        prompt.AppendLine("// If `cursor` is not provided, the most recent page is implied.");
+        prompt.AppendLine("// If `id` is a string, it is treated as a fully qualified URL associated with `source`.");
+        prompt.AppendLine("// If `loc` is not provided, the viewport will be positioned at the beginning of the document or centered on the most relevant passage, if available.");
+        prompt.AppendLine("// Use this function without `id` to scroll to a new location of an opened page.");
+        prompt.AppendLine("type open = (_: {");
+        prompt.AppendLine("id?: number | string, // default: -1");
+        prompt.AppendLine("cursor?: number, // default: -1");
+        prompt.AppendLine("loc?: number, // default: -1");
+        prompt.AppendLine("num_lines?: number, // default: -1");
+        prompt.AppendLine("view_source?: boolean, // default: false");
+        prompt.AppendLine("source?: string,");
+        prompt.AppendLine("}) => any;");
+        prompt.AppendLine();
+        prompt.AppendLine("// Finds exact matches of `pattern` in the current page, or the page given by `cursor`.");
+        prompt.AppendLine("type find = (_: {");
+        prompt.AppendLine("pattern: string,");
+        prompt.AppendLine("cursor?: number, // default: -1");
+        prompt.AppendLine("}) => any;");
+        prompt.AppendLine();
+        prompt.AppendLine("} // namespace browser");
+        prompt.AppendLine();
+        
         prompt.AppendLine("# Valid channels: analysis, commentary, final. Channel must be included for every message.");
         
         if (hasFunctions)

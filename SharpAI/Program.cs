@@ -24,6 +24,11 @@ public class Program
 
         // Register services
         builder.Services.AddHttpClient();
+        
+        // Configure Brave Search options
+        builder.Services.Configure<SharpAI.Models.Browser.BraveSearchOptions>(
+            builder.Configuration.GetSection("BraveSearch"));
+        
         builder.Services.AddSingleton<SharpAI.Services.LLamaModelManager>();
         builder.Services.AddSingleton<SharpAI.Services.LLamaNativeLogging>();
         builder.Services.AddSingleton<SharpAI.Services.WhisperModelManager>();
@@ -32,6 +37,10 @@ public class Program
         builder.Services.AddSingleton<SharpAI.Services.Harmony.HarmonyFormatter>();
         builder.Services.AddSingleton<SharpAI.Services.Harmony.HarmonyParser>();
         builder.Services.AddSingleton<SharpAI.Services.Harmony.StreamingInferenceEngine>();
+        
+        // Register browser services
+        builder.Services.AddSingleton<SharpAI.Services.Browser.BrowserService>();
+        builder.Services.AddSingleton<SharpAI.Services.Harmony.BrowserToolHandler>();
         
         builder.Services.AddSingleton<SharpAI.Services.LLamaSharpService>();
         builder.Services.AddSingleton<SharpAI.Services.WhisperService>();

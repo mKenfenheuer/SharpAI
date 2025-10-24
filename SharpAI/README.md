@@ -8,7 +8,9 @@ A high-performance OpenAI-compatible API server built with ASP.NET Core, featuri
 - **Dynamic Model Selection**: Automatically download and switch between different models based on request parameters
 - **Multi-Architecture Support**: CPU, CUDA 11, and CUDA 12 Docker images available
 - **Audio Format Conversion**: Universal audio format support with automatic WAV 16kHz conversion
-- **Function Calling**: Support for OpenAI-style function calling and tool usage
+- **Function Calling**: Support for OpenAI-style function calling and tool usage with strict schema validation
+- **Browser Tool**: Built-in web browsing capabilities with Brave Search API integration
+- **Structured Output**: Response format control with JSON schema compliance
 - **Streaming Support**: Real-time streaming responses for chat completions
 - **Auto Model Download**: Automatic model downloading from Hugging Face Hub
 - **High Performance**: Built on .NET 9 with optimized concurrent model management
@@ -95,6 +97,23 @@ Models are automatically configured but can be customized by editing `Data/model
 
 - `ASPNETCORE_ENVIRONMENT`: Set to `Development` for development mode
 - `ASPNETCORE_URLS`: Configure listening URLs (default: `http://+:80`)
+
+### Browser Tool Configuration
+
+SharpAI includes a built-in browser tool with web search capabilities. To enable full functionality:
+
+1. Get a free API key from [Brave Search API](https://brave.com/search/api/)
+2. Configure it in `appsettings.Development.json`:
+   ```json
+   {
+     "BraveSearch": {
+       "ApiKey": "your_api_key_here",
+       "BaseUrl": "https://api.search.brave.com/res/v1"
+     }
+   }
+   ```
+
+For detailed configuration instructions, see [`BROWSER_TOOL.md`](BROWSER_TOOL.md).
 
 ## 📖 API Usage
 
