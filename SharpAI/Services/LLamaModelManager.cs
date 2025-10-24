@@ -271,46 +271,6 @@ namespace SharpAI.Services
                 }
             };
 
-            // Try to load from configuration file if it exists
-            var configPath = Path.Combine("Data", "models-config.json");
-            if (File.Exists(configPath))
-            {
-                try
-                {
-                    var configJson = File.ReadAllText(configPath);
-                    var loadedConfig = JsonSerializer.Deserialize<ModelsConfiguration>(configJson, new JsonSerializerOptions
-                    {
-                        PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower
-                    });
-                    
-                    if (loadedConfig?.Models?.Any() == true)
-                    {
-                        _logger.LogInformation("Loaded models configuration from {ConfigPath}", configPath);
-                        return loadedConfig;
-                    }
-                }
-                catch (Exception ex)
-                {
-                    _logger.LogWarning(ex, "Failed to load models configuration from {ConfigPath}, using defaults", configPath);
-                }
-            }
-
-            // Save default configuration for reference
-            try
-            {
-                var defaultConfigJson = JsonSerializer.Serialize(defaultConfig, new JsonSerializerOptions
-                {
-                    PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower,
-                    WriteIndented = true
-                });
-                File.WriteAllText(configPath, defaultConfigJson);
-                _logger.LogInformation("Created default models configuration at {ConfigPath}", configPath);
-            }
-            catch (Exception ex)
-            {
-                _logger.LogWarning(ex, "Failed to save default models configuration");
-            }
-
             return defaultConfig;
         }
 
