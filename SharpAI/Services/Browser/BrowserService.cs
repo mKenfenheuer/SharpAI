@@ -1,3 +1,4 @@
+using System.IO.Compression;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using Microsoft.Extensions.Options;
@@ -28,9 +29,8 @@ public class BrowserService
         {
             if (string.IsNullOrEmpty(_braveOptions.ApiKey))
             {
-                _logger.LogWarning("Brave Search API key not configured, falling back to simulation");
-                var simulatedResults = await SimulateSearchAsync(args.Query, args.TopN ?? 10);
-                return FormatSearchResults(simulatedResults);
+                _logger.LogWarning("Brave Search API key not configured");
+                return "Error: Browser search is not available. The Brave Search API key is not configured. Please contact the administrator to set up the API key in the application configuration.";
             }
 
             var results = await CallBraveSearchApiAsync(args.Query, args.TopN ?? 10);
@@ -41,6 +41,53 @@ public class BrowserService
         {
             _logger.LogError(ex, "Error performing browser search");
             return "Error: Failed to perform search. Please try again.";
+        }
+    }
+
+    public async Task<string> SearchJsonAsync(BrowserSearchArgs args)
+    {
+        _logger.LogInformation("Browser searchjson: {Query}", args.Query);
+
+        try
+        {
+            if (string.IsNullOrEmpty(_braveOptions.ApiKey))
+            {
+                _logger.LogWarning("Brave Search API key not configured");
+                return JsonSerializer.Serialize(new { 
+                    error = "Browser search is not available. The Brave Search API key is not configured. Please contact the administrator to set up the API key in the application configuration." 
+                });
+            }
+
+            var results = await CallBraveSearchApiAsync(args.Query, args.TopN ?? 10);
+            
+            // Simplify the response to only include id, title, description, and URL
+            var simplifiedResults = new List<object>();
+            
+            if (results?.Web?.Results != null)
+            {
+                simplifiedResults = results.Web.Results.Take(args.TopN ?? 10).Select((result, index) => new
+                {
+                    id = index + 1,
+                    title = result.Title,
+                    description = result.Description,
+                    url = result.Url
+                }).Cast<object>().ToList();
+
+                // Store URL mapping for later use in open function
+                UpdateLinkIdMapping(results.Web.Results.Take(args.TopN ?? 10).ToList());
+            }
+
+            return JsonSerializer.Serialize(new
+            {
+                query = args.Query,
+                count = simplifiedResults.Count,
+                results = simplifiedResults
+            }, new JsonSerializerOptions { WriteIndented = true });
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error performing browser searchjson");
+            return JsonSerializer.Serialize(new { error = $"Failed to perform search: {ex.Message}" });
         }
     }
 
@@ -101,6 +148,93 @@ public class BrowserService
         }
     }
 
+    public async Task<string> OpenJsonAsync(BrowserOpenArgs args)
+    {
+        _logger.LogInformation("Browser openjson: Id={Id}, Cursor={Cursor}, Loc={Loc}", args.Id, args.Cursor, args.Loc);
+
+        try
+        {
+            string url = "";
+            
+            // Determine the URL to open
+            if (args.Id is string urlString)
+            {
+                url = urlString;
+            }
+            else if (args.Id is int linkId && linkId > 0)
+            {
+                // In a real implementation, you'd maintain a mapping of link IDs to URLs
+                // from previous search results
+                url = GetUrlFromLinkId(linkId);
+            }
+            else if (args.Cursor.HasValue && args.Cursor > 0 && _pages.ContainsKey(args.Cursor.Value))
+            {
+                // Scrolling on existing page - return JSON format
+                var existingPage = _pages[args.Cursor.Value];
+                var scrollResult = ScrollToLocation(existingPage, args.Loc ?? -1, args.NumLines ?? 20);
+                
+                return JsonSerializer.Serialize(new
+                {
+                    cursor = existingPage.Cursor,
+                    url = existingPage.Url,
+                    title = existingPage.Title,
+                    content = scrollResult,
+                    loc = args.Loc ?? -1,
+                    num_lines = args.NumLines ?? 20,
+                    total_lines = existingPage.Lines.Count
+                }, new JsonSerializerOptions { WriteIndented = true });
+            }
+            else
+            {
+                return JsonSerializer.Serialize(new { error = "No valid URL or page specified to open." });
+            }
+
+            if (string.IsNullOrEmpty(url))
+            {
+                return JsonSerializer.Serialize(new { error = "Could not determine URL to open." });
+            }
+
+            // Fetch the page content
+            var pageContent = await FetchPageContentAsync(url);
+            var page = new BrowserPage
+            {
+                Cursor = _nextCursor++,
+                Url = url,
+                Title = ExtractTitle(pageContent),
+                Content = pageContent,
+                Lines = SplitIntoLines(pageContent)
+            };
+
+            _pages[page.Cursor] = page;
+
+            // Return the page data in JSON format
+            var startLine = args.Loc ?? 1;
+            var numLines = args.NumLines ?? 20;
+            var startIndex = Math.Max(0, startLine - 1);
+            var endIndex = Math.Min(page.Lines.Count, startIndex + numLines);
+            
+            var displayedLines = page.Lines.Skip(startIndex).Take(numLines).ToList();
+
+            return JsonSerializer.Serialize(new
+            {
+                cursor = page.Cursor,
+                url = page.Url,
+                title = page.Title,
+                lines = displayedLines,
+                start_line = startLine,
+                num_lines = numLines,
+                total_lines = page.Lines.Count,
+                view_source = args.ViewSource ?? false,
+                content_length = pageContent.Length
+            }, new JsonSerializerOptions { WriteIndented = true });
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error opening page for JSON");
+            return JsonSerializer.Serialize(new { error = $"Failed to open page: {ex.Message}" });
+        }
+    }
+
     public Task<string> FindAsync(BrowserFindArgs args)
     {
         _logger.LogInformation("Browser find: Pattern={Pattern}, Cursor={Cursor}", args.Pattern, args.Cursor);
@@ -150,7 +284,21 @@ public class BrowserService
             var response = await _httpClient.SendAsync(request);
             response.EnsureSuccessStatusCode();
 
-            var jsonContent = await response.Content.ReadAsStringAsync();
+            string jsonContent;
+            
+            // Check if the response is gzipped and decompress if needed
+            if (response.Content.Headers.ContentEncoding.Contains("gzip"))
+            {
+                using var stream = await response.Content.ReadAsStreamAsync();
+                using var gzipStream = new GZipStream(stream, CompressionMode.Decompress);
+                using var reader = new StreamReader(gzipStream);
+                jsonContent = await reader.ReadToEndAsync();
+            }
+            else
+            {
+                jsonContent = await response.Content.ReadAsStringAsync();
+            }
+            
             _logger.LogDebug("Brave Search API response: {Response}", jsonContent);
 
             var searchResponse = JsonSerializer.Deserialize<BraveSearchResponse>(jsonContent, new JsonSerializerOptions
@@ -199,18 +347,6 @@ public class BrowserService
             formatted.Add($"【{linkId}†{result.Url}】");
             formatted.Add($"**{result.Title}**");
             formatted.Add(result.Description);
-            
-            // Add additional context if available
-            if (result.Profile != null && !string.IsNullOrEmpty(result.Profile.Name))
-            {
-                formatted.Add($"Source: {result.Profile.Name}");
-            }
-            
-            if (!string.IsNullOrEmpty(result.Age))
-            {
-                formatted.Add($"Age: {result.Age}");
-            }
-            
             formatted.Add("");
         }
 
@@ -232,52 +368,6 @@ public class BrowserService
             var linkId = i + 1;
             _linkIdToUrlMapping[linkId] = results[i].Url;
         }
-    }
-
-    private async Task<List<BrowserSearchResult>> SimulateSearchAsync(string query, int topN)
-    {
-        // Simulate search results for demonstration
-        // In a real implementation, you'd call an actual search API
-        await Task.Delay(100); // Simulate network delay
-
-        var results = new List<BrowserSearchResult>();
-        
-        for (int i = 1; i <= Math.Min(topN, 5); i++)
-        {
-            results.Add(new BrowserSearchResult
-            {
-                Id = i,
-                Title = $"Search result {i} for \"{query}\"",
-                Url = $"https://example.com/result-{i}",
-                Summary = $"This is a summary of search result {i} related to {query}. It contains relevant information about the topic."
-            });
-        }
-
-        return results;
-    }
-
-    private string FormatSearchResults(List<BrowserSearchResult> results)
-    {
-        if (!results.Any())
-        {
-            return "No search results found.";
-        }
-
-        var formatted = new List<string>
-        {
-            $"Found {results.Count} search results:",
-            ""
-        };
-
-        foreach (var result in results)
-        {
-            formatted.Add($"【{result.Id}†{result.Url}】");
-            formatted.Add($"**{result.Title}**");
-            formatted.Add(result.Summary);
-            formatted.Add("");
-        }
-
-        return string.Join("\n", formatted);
     }
 
     private async Task<string> FetchPageContentAsync(string url)

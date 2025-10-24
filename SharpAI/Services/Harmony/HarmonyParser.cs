@@ -63,47 +63,54 @@ public class HarmonyParser
             }
         }
 
-        // Extract tool calls from commentary and analysis channels
-        var toolCalls = messages.Where(m => 
-            (m.Channel == "commentary" || m.Channel == "analysis") && 
-            !string.IsNullOrEmpty(m.Recipient)).ToList();
+        // Extract function calls from commentary channel and browser calls from analysis channel
+        var functionCalls = messages.Where(m => 
+            m.Channel == "commentary" && 
+            !string.IsNullOrEmpty(m.Recipient) &&
+            m.Recipient.StartsWith("functions.", StringComparison.OrdinalIgnoreCase)).ToList();
+            
+        var browserCalls = messages.Where(m => 
+            m.Channel == "analysis" && 
+            !string.IsNullOrEmpty(m.Recipient) &&
+            m.Recipient.StartsWith("browser.", StringComparison.OrdinalIgnoreCase)).ToList();
+            
         var newToolCalls = new List<HarmonyToolCall>();
         
-        foreach (var toolCall in toolCalls)
+        // Handle function calls
+        foreach (var toolCall in functionCalls)
         {
-            if (toolCall.Recipient?.StartsWith("functions.") == true)
+            var harmonyCall = new HarmonyToolCall
             {
-                var harmonyCall = new HarmonyToolCall
-                {
-                    Name = toolCall.Recipient.Substring("functions.".Length),
-                    Arguments = toolCall.Content,
-                    Recipient = toolCall.Recipient
-                };
+                Name = toolCall.Recipient.Substring("functions.".Length),
+                Arguments = toolCall.Content,
+                Recipient = toolCall.Recipient
+            };
 
-                // Check if this is a new tool call
-                if (!state.ToolCalls.Any(tc => tc.Name == harmonyCall.Name && tc.Arguments == harmonyCall.Arguments))
-                {
-                    state.ToolCalls.Add(harmonyCall);
-                    newToolCalls.Add(harmonyCall);
-                    state.HasToolCall = true;
-                }
+            // Check if this is a new tool call
+            if (!state.ToolCalls.Any(tc => tc.Name == harmonyCall.Name && tc.Arguments == harmonyCall.Arguments))
+            {
+                state.ToolCalls.Add(harmonyCall);
+                newToolCalls.Add(harmonyCall);
+                state.HasToolCall = true;
             }
-            else if (toolCall.Recipient?.StartsWith("browser.") == true)
+        }
+        
+        // Handle browser calls
+        foreach (var toolCall in browserCalls)
+        {
+            var harmonyCall = new HarmonyToolCall
             {
-                var harmonyCall = new HarmonyToolCall
-                {
-                    Name = toolCall.Recipient.Substring("browser.".Length),
-                    Arguments = toolCall.Content,
-                    Recipient = toolCall.Recipient
-                };
+                Name = toolCall.Recipient.Substring("browser.".Length),
+                Arguments = toolCall.Content,
+                Recipient = toolCall.Recipient
+            };
 
-                // Check if this is a new tool call
-                if (!state.ToolCalls.Any(tc => tc.Name == harmonyCall.Name && tc.Arguments == harmonyCall.Arguments))
-                {
-                    state.ToolCalls.Add(harmonyCall);
-                    newToolCalls.Add(harmonyCall);
-                    state.HasToolCall = true;
-                }
+            // Check if this is a new tool call
+            if (!state.ToolCalls.Any(tc => tc.Name == harmonyCall.Name && tc.Arguments == harmonyCall.Arguments))
+            {
+                state.ToolCalls.Add(harmonyCall);
+                newToolCalls.Add(harmonyCall);
+                state.HasToolCall = true;
             }
         }
 
@@ -145,20 +152,38 @@ public class HarmonyParser
                 response.Reasoning = string.Join("\n", analysisMessages.Select(m => m.Content));
             }
 
-            // Extract tool calls from commentary channel
-            var toolCalls = messages.Where(m => m.Channel == "commentary" && !string.IsNullOrEmpty(m.Recipient)).ToList();
-            foreach (var toolCall in toolCalls)
+            // Extract function calls from commentary channel
+            var functionCalls = messages.Where(m => 
+                m.Channel == "commentary" && 
+                !string.IsNullOrEmpty(m.Recipient) &&
+                m.Recipient.StartsWith("functions.", StringComparison.OrdinalIgnoreCase)).ToList();
+                
+            foreach (var toolCall in functionCalls)
             {
-                if (toolCall.Recipient?.StartsWith("functions.") == true)
+                response.ToolCalls.Add(new HarmonyToolCall
                 {
-                    response.ToolCalls.Add(new HarmonyToolCall
-                    {
-                        Name = toolCall.Recipient.Substring("functions.".Length),
-                        Arguments = toolCall.Content,
-                        Recipient = toolCall.Recipient
-                    });
-                    response.FunctionCall = true;
-                }
+                    Name = toolCall.Recipient.Substring("functions.".Length),
+                    Arguments = toolCall.Content,
+                    Recipient = toolCall.Recipient
+                });
+                response.FunctionCall = true;
+            }
+            
+            // Extract browser calls from analysis channel
+            var browserCalls = messages.Where(m => 
+                m.Channel == "analysis" && 
+                !string.IsNullOrEmpty(m.Recipient) &&
+                m.Recipient.StartsWith("browser.", StringComparison.OrdinalIgnoreCase)).ToList();
+                
+            foreach (var toolCall in browserCalls)
+            {
+                response.ToolCalls.Add(new HarmonyToolCall
+                {
+                    Name = toolCall.Recipient.Substring("browser.".Length),
+                    Arguments = toolCall.Content,
+                    Recipient = toolCall.Recipient
+                });
+                // Note: browser calls don't set FunctionCall = true as they're handled internally
             }
 
             // If no final channel content found, try to extract from the raw response
@@ -203,6 +228,32 @@ public class HarmonyParser
                 Constraint = constraint,
                 Content = content
             });
+        }
+
+        // Fallback: Look for browser tool calls in a more flexible format
+        // This handles cases where the model generates: to=browser.search <|constrain|>json<|message|>{...}
+        var browserCallPattern = @"to=(browser\.\w+)\s*<\|constrain\|>\s*json<\|message\|>(\{[^}]*\})";
+        var browserMatches = Regex.Matches(response, browserCallPattern, RegexOptions.Singleline | RegexOptions.IgnoreCase);
+        
+        foreach (Match match in browserMatches)
+        {
+            var recipient = match.Groups[1].Value.Trim();
+            var content = match.Groups[2].Value.Trim();
+            
+            // Only add if we don't already have this browser call
+            if (!messages.Any(m => m.Recipient == recipient && m.Content == content))
+            {
+                messages.Add(new HarmonyMessage
+                {
+                    Role = "assistant",
+                    Channel = "analysis", // Browser calls should be in analysis channel
+                    Recipient = recipient,
+                    Constraint = "json",
+                    Content = content
+                });
+                
+                _logger.LogDebug("Fallback browser call parsed: {Recipient} with args {Content}", recipient, content);
+            }
         }
 
         return messages;

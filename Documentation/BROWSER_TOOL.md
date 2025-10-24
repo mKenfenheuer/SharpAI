@@ -42,15 +42,19 @@ Or edit `appsettings.json` (not recommended for production):
 
 ## Fallback Behavior
 
-If no API key is configured, the browser tool will fall back to simulated search results for demonstration purposes. For production use, it's recommended to configure a real API key.
+The browser tool requires a valid Brave Search API key to function. If no API key is configured, the browser tool will return an error message informing the user that the search functionality is not available. The LLM will then work with this error message and can inform the user about the configuration requirement.
+
+For production use, it's essential to configure a real API key to enable web browsing capabilities.
 
 ## Browser Tool Usage
 
-The browser tool provides three main functions:
+The browser tool provides five main functions:
 
-1. **search** - Search the web for information
-2. **open** - Open web pages and navigate to specific content
-3. **find** - Search for patterns within opened pages
+1. **search** - Search the web for information and return formatted results
+2. **searchjson** - Search the web for information and return raw JSON data
+3. **open** - Open web pages and navigate to specific content
+4. **openjson** - Open web pages and return structured JSON data with metadata
+5. **find** - Search for patterns within opened pages
 
 The LLM can use these tools naturally through the chat interface. When browser functions are called, they are handled internally and the results are incorporated into the response automatically.
 
@@ -59,3 +63,11 @@ The LLM can use these tools naturally through the chat interface. When browser f
 User: "Search for the latest news about artificial intelligence"
 
 The LLM will automatically call the browser.search function and incorporate the results into its response, providing up-to-date information from the web.
+
+User: "Search for AI news and give me the raw data"
+
+The LLM can use browser.searchjson to get structured JSON data from the search results, which is useful for programmatic processing or when you need the exact search metadata, URLs, and structured content.
+
+User: "Open that first link and give me the structured data"
+
+The LLM can use browser.openjson to open a web page and return structured JSON data that includes the page content, metadata like cursor, URL, title, line information, and content statistics. This is particularly useful when you need programmatic access to the page data.

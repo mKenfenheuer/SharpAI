@@ -24,7 +24,9 @@ public class BrowserToolHandler
             return functionName switch
             {
                 "search" => await HandleSearchAsync(arguments),
+                "searchjson" => await HandleSearchJsonAsync(arguments),
                 "open" => await HandleOpenAsync(arguments),
+                "openjson" => await HandleOpenJsonAsync(arguments),
                 "find" => await HandleFindAsync(arguments),
                 _ => $"Error: Unknown browser function '{functionName}'"
             };
@@ -47,6 +49,17 @@ public class BrowserToolHandler
         return await _browserService.SearchAsync(args);
     }
 
+    private async Task<string> HandleSearchJsonAsync(string arguments)
+    {
+        var args = JsonSerializer.Deserialize<BrowserSearchArgs>(arguments);
+        if (args == null)
+        {
+            return JsonSerializer.Serialize(new { error = "Invalid search arguments" });
+        }
+
+        return await _browserService.SearchJsonAsync(args);
+    }
+
     private async Task<string> HandleOpenAsync(string arguments)
     {
         var args = JsonSerializer.Deserialize<BrowserOpenArgs>(arguments);
@@ -56,6 +69,17 @@ public class BrowserToolHandler
         }
 
         return await _browserService.OpenAsync(args);
+    }
+
+    private async Task<string> HandleOpenJsonAsync(string arguments)
+    {
+        var args = JsonSerializer.Deserialize<BrowserOpenArgs>(arguments);
+        if (args == null)
+        {
+            return JsonSerializer.Serialize(new { error = "Invalid open arguments" });
+        }
+
+        return await _browserService.OpenJsonAsync(args);
     }
 
     private async Task<string> HandleFindAsync(string arguments)

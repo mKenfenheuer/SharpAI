@@ -44,6 +44,13 @@ public class HarmonyFormatter
         prompt.AppendLine("source?: string,");
         prompt.AppendLine("}) => any;");
         prompt.AppendLine();
+        prompt.AppendLine("// Searches for information related to `query` and returns raw JSON data with `topn` results.");
+        prompt.AppendLine("type searchjson = (_: {");
+        prompt.AppendLine("query: string,");
+        prompt.AppendLine("topn?: number, // default: 10");
+        prompt.AppendLine("source?: string,");
+        prompt.AppendLine("}) => any;");
+        prompt.AppendLine();
         prompt.AppendLine("// Opens the link `id` from the page indicated by `cursor` starting at line number `loc`, showing `num_lines` lines.");
         prompt.AppendLine("// Valid link ids are displayed with the formatting: `【{id}†.*】`.");
         prompt.AppendLine("// If `cursor` is not provided, the most recent page is implied.");
@@ -51,6 +58,21 @@ public class HarmonyFormatter
         prompt.AppendLine("// If `loc` is not provided, the viewport will be positioned at the beginning of the document or centered on the most relevant passage, if available.");
         prompt.AppendLine("// Use this function without `id` to scroll to a new location of an opened page.");
         prompt.AppendLine("type open = (_: {");
+        prompt.AppendLine("id?: number | string, // default: -1");
+        prompt.AppendLine("cursor?: number, // default: -1");
+        prompt.AppendLine("loc?: number, // default: -1");
+        prompt.AppendLine("num_lines?: number, // default: -1");
+        prompt.AppendLine("view_source?: boolean, // default: false");
+        prompt.AppendLine("source?: string,");
+        prompt.AppendLine("}) => any;");
+        prompt.AppendLine();
+        prompt.AppendLine("// Opens the link `id` from the page indicated by `cursor` starting at line number `loc`, showing `num_lines` lines, and returns structured JSON data.");
+        prompt.AppendLine("// Valid link ids are displayed with the formatting: `【{id}†.*】`.");
+        prompt.AppendLine("// If `cursor` is not provided, the most recent page is implied.");
+        prompt.AppendLine("// If `id` is a string, it is treated as a fully qualified URL associated with `source`.");
+        prompt.AppendLine("// If `loc` is not provided, the viewport will be positioned at the beginning of the document or centered on the most relevant passage, if available.");
+        prompt.AppendLine("// Use this function without `id` to scroll to a new location of an opened page.");
+        prompt.AppendLine("type openjson = (_: {");
         prompt.AppendLine("id?: number | string, // default: -1");
         prompt.AppendLine("cursor?: number, // default: -1");
         prompt.AppendLine("loc?: number, // default: -1");
@@ -69,10 +91,22 @@ public class HarmonyFormatter
         prompt.AppendLine();
         
         prompt.AppendLine("# Valid channels: analysis, commentary, final. Channel must be included for every message.");
+        prompt.AppendLine();
+        prompt.AppendLine("IMPORTANT FORMAT RULES:");
+        prompt.AppendLine("- Browser tool calls MUST use the analysis channel");
+        prompt.AppendLine("- Use this EXACT format for browser calls:");
+        prompt.AppendLine("  <|channel|>analysis to=browser.search<|constrain|>json<|message|>{\"query\":\"search terms\",\"topn\":10,\"source\":\"web\"}");
+        prompt.AppendLine("  <|channel|>analysis to=browser.searchjson<|constrain|>json<|message|>{\"query\":\"search terms\",\"topn\":10,\"source\":\"web\"}");
+        prompt.AppendLine("  <|channel|>analysis to=browser.open<|constrain|>json<|message|>{\"id\":1,\"cursor\":1}");
+        prompt.AppendLine("  <|channel|>analysis to=browser.openjson<|constrain|>json<|message|>{\"id\":1,\"cursor\":1}");
+        prompt.AppendLine("  <|channel|>analysis to=browser.find<|constrain|>json<|message|>{\"pattern\":\"search pattern\"}");
+        prompt.AppendLine("- Always end with proper channel for final response:");
+        prompt.AppendLine("  <|channel|>final<|message|>Your response to the user");
         
         if (hasFunctions)
         {
-            prompt.AppendLine("Calls to these tools must go to the commentary channel: 'functions'.");
+            prompt.AppendLine("- Function calls must go to the commentary channel with format:");
+            prompt.AppendLine("  <|channel|>commentary to=functions.function_name<|message|>{\"param\":\"value\"}");
         }
         
         prompt.AppendLine("<|end|>");
@@ -520,8 +554,19 @@ public class HarmonyFormatter
 
     private string GetToolName(ChatMessage message)
     {
-        // Extract tool name from message context or use default
-        // This would need to be implemented based on how tool messages are structured
+        // Extract tool name from message context
+        if (!string.IsNullOrEmpty(message.Name))
+        {
+            // For browser tools, use the recipient name directly (e.g., "browser.search")
+            if (message.Name.StartsWith("browser.", StringComparison.OrdinalIgnoreCase))
+            {
+                return message.Name;
+            }
+            // For other function tools, use the name as is
+            return message.Name;
+        }
+        
+        // Fallback for when no name is provided
         return "functions.tool_result";
     }
 }

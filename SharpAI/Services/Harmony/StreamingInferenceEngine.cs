@@ -33,8 +33,6 @@ public class StreamingInferenceEngine
         InferenceParams inferenceParams,
         [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
-        _logger.LogInformation("Starting unified streaming inference for model: {Model}", request.Model);
-
         // Check if tools are available and should be used
         var shouldUseFunctions = request.Tools?.Any() == true && 
                                  (request.ToolChoice != ToolChoice.None);
@@ -95,7 +93,64 @@ public class StreamingInferenceEngine
         // Handle browser tool calls internally
         if (parsedResponse.ToolCalls.Any(tc => BrowserToolHandler.IsBrowserToolCall(tc.Recipient)))
         {
-            await HandleBrowserToolCallsAsync(parsedResponse);
+            var toolResultMessages = await HandleBrowserToolCallsAsync(parsedResponse);
+            
+            // If we have tool results, continue inference with them
+            if (toolResultMessages.Any())
+            {
+                // Get browser tool calls and ensure they have IDs
+                var browserToolCalls = parsedResponse.ToolCalls
+                    .Where(tc => BrowserToolHandler.IsBrowserToolCall(tc.Recipient))
+                    .ToList();
+
+                // Assign IDs to tool calls if they don't have them
+                foreach (var toolCall in browserToolCalls)
+                {
+                    if (string.IsNullOrEmpty(toolCall.Id))
+                    {
+                        toolCall.Id = Guid.NewGuid().ToString();
+                    }
+                }
+
+                // Create assistant message with tool calls - preserve original Harmony format
+                // For browser tool calls, we need to preserve the complete chain-of-thought with proper channels
+                var assistantContent = completeResponse; // Use the raw response to preserve channel formatting
+                
+                var assistantToolCallMessage = new ChatMessage
+                {
+                    Role = ChatRole.Assistant,
+                    Content = assistantContent,
+                    ToolCalls = browserToolCalls.Select(tc => new ToolCall
+                    {
+                        Id = tc.Id!,
+                        Type = ToolType.Function,
+                        Function = new FunctionCall
+                        {
+                            Name = tc.Name,
+                            Arguments = tc.Arguments
+                        }
+                    }).ToList()
+                };
+
+                // Build new message list with original messages + assistant tool call + tool results
+                // This preserves the entire conversation history and simply continues the chat
+                var continuedMessages = new List<ChatMessage>(messages);
+                continuedMessages.Add(assistantToolCallMessage);
+                continuedMessages.AddRange(toolResultMessages);
+
+                _logger.LogDebug("Continuing inference recursively with {TotalMessageCount} messages (original: {OriginalCount}, assistant: 1, tool results: {ToolResultCount})", 
+                    continuedMessages.Count, messages.Count, toolResultMessages.Count);
+
+                // Continue inference with tool results using recursive call
+                await foreach (var continuedResult in GenerateStreamAsync(
+                    continuedMessages, request, modelInstance, inferenceParams, cancellationToken))
+                {
+                    yield return continuedResult;
+                }
+                
+                // Return early as the continued inference handles the final result
+                yield break;
+            }
         }
 
         // Apply response format validation if needed
@@ -149,31 +204,60 @@ public class StreamingInferenceEngine
         return content;
     }
 
-    private async Task HandleBrowserToolCallsAsync(ParsedResponse parsedResponse)
+    private async Task<List<ChatMessage>> HandleBrowserToolCallsAsync(ParsedResponse parsedResponse)
     {
         var browserToolCalls = parsedResponse.ToolCalls
             .Where(tc => BrowserToolHandler.IsBrowserToolCall(tc.Recipient))
             .ToList();
 
+        var toolResultMessages = new List<ChatMessage>();
+
         foreach (var toolCall in browserToolCalls)
         {
             try
             {
+                // Ensure tool call has an ID
+                if (string.IsNullOrEmpty(toolCall.Id))
+                {
+                    toolCall.Id = Guid.NewGuid().ToString();
+                }
+
                 var functionName = BrowserToolHandler.ExtractBrowserFunction(toolCall.Recipient);
                 var result = await _browserHandler.HandleBrowserToolCall(functionName, toolCall.Arguments);
                 
-                // Update the content with browser tool results
-                if (!string.IsNullOrEmpty(result))
+                // Create a tool result message
+                var toolResultMessage = new ChatMessage
                 {
-                    parsedResponse.Content += $"\n\n{result}";
-                }
+                    Role = ChatRole.Tool,
+                    Content = result ?? "Tool execution completed successfully",
+                    ToolCallId = toolCall.Id,
+                    Name = toolCall.Recipient
+                };
+
+                toolResultMessages.Add(toolResultMessage);
 
                 _logger.LogInformation("Browser tool call executed: {Function}", functionName);
             }
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Error executing browser tool call: {Recipient}", toolCall.Recipient);
-                parsedResponse.Content += $"\n\nError executing browser tool: {ex.Message}";
+                
+                // Ensure tool call has an ID even for errors
+                if (string.IsNullOrEmpty(toolCall.Id))
+                {
+                    toolCall.Id = Guid.NewGuid().ToString();
+                }
+
+                // Create error result message
+                var errorMessage = new ChatMessage
+                {
+                    Role = ChatRole.Tool,
+                    Content = $"Error executing browser tool: {ex.Message}",
+                    ToolCallId = toolCall.Id,
+                    Name = toolCall.Recipient
+                };
+
+                toolResultMessages.Add(errorMessage);
             }
         }
 
@@ -181,6 +265,17 @@ public class StreamingInferenceEngine
         parsedResponse.ToolCalls = parsedResponse.ToolCalls
             .Where(tc => !BrowserToolHandler.IsBrowserToolCall(tc.Recipient))
             .ToList();
+
+        if (!toolResultMessages.Any())
+        {
+            toolResultMessages.Add(new ChatMessage
+            {
+                Role = ChatRole.Tool,
+                Content = "No browser tool calls were able to be executed.",
+            });
+        }
+
+        return toolResultMessages;
     }
 }
 

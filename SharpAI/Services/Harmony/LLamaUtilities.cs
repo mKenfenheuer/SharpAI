@@ -136,7 +136,7 @@ public static class LLamaUtilities
 
         var inferenceParams = new InferenceParams
         {
-            MaxTokens = request.MaxTokens ?? 2048,
+            MaxTokens = request.MaxTokens ?? int.MaxValue,
             AntiPrompts = antiPrompts,
             SamplingPipeline = samplingPipeline,
             DecodeSpecialTokens = true
