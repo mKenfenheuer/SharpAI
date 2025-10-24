@@ -39,22 +39,16 @@ WORKDIR "/src"
 RUN dotnet build "SharpAI.csproj" -c Release -o /app/build
 
 FROM build AS publish
-# ...existing code...
-# Changed to publish a self-contained linux-x64 application
-RUN dotnet publish "SharpAI.csproj" -c Release -r linux-x64 --self-contained true -o /app/publish
+RUN dotnet publish "SharpAI.csproj" -c Release -o /app/publish
 
 FROM base AS final
 WORKDIR /app
 COPY --from=publish /app/publish .
 RUN cp /app/runtimes/cuda/linux-x64/*.so /app/runtimes/linux-x64/
 
-# ensure the self-contained native executable is runnable
-RUN if [ -f /app/SharpAI ]; then chmod +x /app/SharpAI; fi
-
 EXPOSE 80
 ENV ASPNETCORE_HTTP_PORTS=80
 ENV NVIDIA_VISIBLE_DEVICES=all
 ENV NVIDIA_DRIVER_CAPABILITIES=compute,utility
 
-# Run the self-contained native executable instead of 'dotnet SharpAI.dll'
-ENTRYPOINT ["./SharpAI"]
+ENTRYPOINT ["dotnet", "SharpAI.dll"]
