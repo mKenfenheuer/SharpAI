@@ -455,6 +455,28 @@ public class LLamaSharpService
                 {
                     _logger.LogDebug(ex, "Failed to get BOS token from model");
                 }
+
+                // Also try to get EOT token (sometimes relevant for stopping)
+                try
+                {
+                    var eotToken = modelInstance.Weights.NativeHandle.Vocab.EOT;
+                    if (eotToken.HasValue)
+                    {
+                        var eotTokenString = modelInstance.Weights.NativeHandle.Vocab.LLamaTokenToString(eotToken, true);
+                        if (!string.IsNullOrEmpty(eotTokenString) && !stopSequences.Contains(eotTokenString))
+                        {
+                            // Only add EOT as stop sequence if it's different from EOS and seems relevant
+                            if (eotToken != eosToken)
+                            {
+                                _logger.LogDebug("Found EOT token: {EotToken}", eotTokenString);
+                            }
+                        }
+                    }
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogDebug(ex, "Failed to get EOT token from model");
+                }
             }
         }
         catch (Exception ex)
