@@ -29,8 +29,9 @@ WORKDIR /src
 COPY ["SharpAI.csproj", "."]
 COPY . .
 
-RUN dotnet add package LLamaSharp.Backend.Cuda12
-RUN dotnet add package LLamaSharp.Backend.Cuda12.Linux
+RUN dotnet remove package Whisper.net.Runtime
+RUN dotnet add package Whisper.net.Runtime.Cuda
+RUN dotnet add package Whisper.net.Runtime.Cuda.Linux
 RUN dotnet restore "SharpAI.csproj"
 WORKDIR "/src"
 RUN dotnet build "SharpAI.csproj" -c Release -o /app/build
