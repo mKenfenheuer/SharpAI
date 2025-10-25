@@ -41,7 +41,7 @@ public class StreamingInferenceEngine
         var formattedPrompt = _formatter.FormatPrompt(
             messages, 
             shouldUseFunctions, 
-            request.ReasoningEffort ?? ReasoningEffortLevel.Medium, 
+            request.ReasoningEffort ?? ReasoningEffortLevel.Low, 
             request.Tools,
             request.ResponseFormat);
 
