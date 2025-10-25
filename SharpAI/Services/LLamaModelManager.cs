@@ -26,6 +26,12 @@ namespace SharpAI.Services
         private readonly SemaphoreSlim _downloadSemaphore = new(1, 1);
         private readonly LLamaNativeLogging _nativeLogging;
 
+        /// <summary>
+        /// Initializes a new instance of the LLamaModelManager.
+        /// </summary>
+        /// <param name="logger">Logger for model manager operations</param>
+        /// <param name="httpClient">HTTP client for downloading models</param>
+        /// <param name="nativeLogging">Native logging bridge for LLama</param>
         public LLamaModelManager(ILogger<LLamaModelManager> logger, HttpClient httpClient, LLamaNativeLogging nativeLogging)
         {
             _logger = logger;
@@ -37,6 +43,11 @@ namespace SharpAI.Services
             _modelsConfig = LoadModelsConfiguration();
         }
 
+        /// <summary>
+        /// Gets a model instance by name, loading it if necessary. Maps OpenAI model names to GPT-OSS models.
+        /// </summary>
+        /// <param name="modelName">Requested model name (OpenAI-compatible or direct GPT-OSS name)</param>
+        /// <returns>Loaded model instance</returns>
         public async Task<ModelInstance> GetModelAsync(string modelName)
         {
             // Map OpenAI model names to gpt-oss models
@@ -74,6 +85,11 @@ namespace SharpAI.Services
             return modelInstance;
         }
 
+        /// <summary>
+        /// Ensures a model file exists locally, downloading it if necessary.
+        /// </summary>
+        /// <param name="config">Model configuration</param>
+        /// <returns>Path to the local model file</returns>
         private async Task<string> EnsureModelFileAsync(ModelConfiguration config)
         {
             var modelPath = Path.Combine(_modelsDirectory, config.Filename);
@@ -105,6 +121,11 @@ namespace SharpAI.Services
             }
         }
 
+        /// <summary>
+        /// Downloads a model from HuggingFace with progress tracking.
+        /// </summary>
+        /// <param name="config">Model configuration</param>
+        /// <param name="destinationPath">Local path to save the model</param>
         private async Task DownloadModelFromHuggingFaceAsync(ModelConfiguration config, string destinationPath)
         {
             var huggingFaceUrl = $"https://huggingface.co/{config.HuggingFaceId}/resolve/main/{config.Filename}";
@@ -140,8 +161,8 @@ namespace SharpAI.Services
                     if (DateTime.UtcNow - lastLogTime > TimeSpan.FromSeconds(30))
                     {
                         var progress = totalBytes > 0 ? (downloadedBytes * 100.0 / totalBytes) : 0;
-                        _logger.LogInformation("Downloading {ModelName}: {Progress:F1}% ({DownloadedMB:F1}/{TotalMB:F1} MB)", 
-                            config.Name, progress, downloadedBytes / 1024.0 / 1024.0, totalBytes / 1024.0 / 1024.0);
+                            _logger.LogDebug("Downloading {ModelName}: {Progress:F1}% ({DownloadedMB:F1}/{TotalMB:F1} MB)", 
+                                config.Name, progress, downloadedBytes / 1024.0 / 1024.0, totalBytes / 1024.0 / 1024.0);
                         lastLogTime = DateTime.UtcNow;
                     }
                 }
@@ -164,6 +185,12 @@ namespace SharpAI.Services
             }
         }
 
+        /// <summary>
+        /// Loads a model from a local file into memory and creates execution context.
+        /// </summary>
+        /// <param name="config">Model configuration</param>
+        /// <param name="modelPath">Path to the local model file</param>
+        /// <returns>Loaded model instance</returns>
         private async Task<ModelInstance> LoadModelAsync(ModelConfiguration config, string modelPath)
         {
             _logger.LogInformation("Loading model {ModelName} from {Path}", config.Name, modelPath);
@@ -203,14 +230,25 @@ namespace SharpAI.Services
             }
         }
 
+        /// <summary>
+        /// Loads Jinja template for the model (GPT-OSS models use harmony format instead).
+        /// </summary>
+        /// <param name="config">Model configuration</param>
+        /// <param name="weights">Loaded model weights</param>
+        /// <returns>Template instance or null for harmony format models</returns>
         private async Task<LLamaTemplate?> LoadJinjaTemplateAsync(ModelConfiguration config, LLamaWeights weights)
         {
             // GPT-OSS models use harmony format, not Jinja templates
             // Return null as templates are handled by the harmony formatter in LLamaSharp service
-            _logger.LogInformation("Using harmony format for GPT-OSS model {ModelName}, no template needed", config.Name);
+            _logger.LogDebug("Using harmony format for GPT-OSS model {ModelName}, no template needed", config.Name);
             return null;
         }
 
+        /// <summary>
+        /// Maps OpenAI model names to internal GPT-OSS model names.
+        /// </summary>
+        /// <param name="modelName">OpenAI-style model name</param>
+        /// <returns>Internal GPT-OSS model name</returns>
         private string MapOpenAIModelToGptOss(string modelName)
         {
             return modelName.ToLowerInvariant() switch
@@ -241,6 +279,10 @@ namespace SharpAI.Services
             };
         }
 
+        /// <summary>
+        /// Loads model configuration from defaults (could be extended to read from files).
+        /// </summary>
+        /// <returns>Models configuration with available GPT-OSS models</returns>
         private ModelsConfiguration LoadModelsConfiguration()
         {
             // Default configuration with popular models
@@ -274,6 +316,10 @@ namespace SharpAI.Services
             return defaultConfig;
         }
 
+        /// <summary>
+        /// Gets list of all available model names (OpenAI-compatible names).
+        /// </summary>
+        /// <returns>List of supported model names</returns>
         public List<string> GetAvailableModels()
         {
             // Return OpenAI-compatible model names that are supported
@@ -302,11 +348,19 @@ namespace SharpAI.Services
             };
         }
 
+        /// <summary>
+        /// Gets list of internal model names (GPT-OSS model names).
+        /// </summary>
+        /// <returns>List of internal model names</returns>
         public List<string> GetInternalModels()
         {
             return _modelsConfig.Models.Select(m => m.Name).ToList();
         }
 
+        /// <summary>
+        /// Unloads a model from memory and disposes resources.
+        /// </summary>
+        /// <param name="modelName">Name of the model to unload</param>
         public void UnloadModel(string modelName)
         {
             if (_loadedModels.TryRemove(modelName, out var model))
@@ -328,6 +382,9 @@ namespace SharpAI.Services
         }
     }
 
+    /// <summary>
+    /// Represents a loaded model instance with weights, context, and executor.
+    /// </summary>
     public class ModelInstance : IDisposable
     {
         public string Name { get; set; } = string.Empty;

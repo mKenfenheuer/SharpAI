@@ -6,14 +6,25 @@ using SharpAI.Models.Browser;
 
 namespace SharpAI.Services.Browser;
 
+/// <summary>
+/// Provides browser functionality including web search and page content retrieval.
+/// Integrates with Brave Search API for web search capabilities and maintains page cache for navigation.
+/// </summary>
 public class BrowserService
 {
     private readonly HttpClient _httpClient;
     private readonly ILogger<BrowserService> _logger;
     private readonly BraveSearchOptions _braveOptions;
     private readonly Dictionary<int, BrowserPage> _pages = new();
+    private readonly Dictionary<int, string> _linkIdToUrlMapping = new();
     private int _nextCursor = 1;
 
+    /// <summary>
+    /// Initializes a new instance of the BrowserService.
+    /// </summary>
+    /// <param name="httpClient">HTTP client for making web requests</param>
+    /// <param name="logger">Logger for service operations</param>
+    /// <param name="braveOptions">Configuration options for Brave Search API</param>
     public BrowserService(HttpClient httpClient, ILogger<BrowserService> logger, IOptions<BraveSearchOptions> braveOptions)
     {
         _httpClient = httpClient;
@@ -21,9 +32,14 @@ public class BrowserService
         _braveOptions = braveOptions.Value;
     }
 
+    /// <summary>
+    /// Performs a web search using Brave Search API and returns formatted results.
+    /// </summary>
+    /// <param name="args">Search parameters including query and result count</param>
+    /// <returns>Formatted search results or error message</returns>
     public async Task<string> SearchAsync(BrowserSearchArgs args)
     {
-        _logger.LogInformation("Browser search: {Query}", args.Query);
+        _logger.LogInformation("Performing web search for query: {Query}", args.Query);
 
         try
         {
@@ -35,24 +51,30 @@ public class BrowserService
 
             var results = await CallBraveSearchApiAsync(args.Query, args.TopN ?? 10);
             var response = FormatBraveSearchResults(results, args.TopN ?? 10);
+            _logger.LogInformation("Search completed successfully, returned {Count} results", results?.Web?.Results?.Count ?? 0);
             return response;
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Error performing browser search");
+            _logger.LogError(ex, "Error performing browser search for query: {Query}", args.Query);
             return "Error: Failed to perform search. Please try again.";
         }
     }
 
+    /// <summary>
+    /// Performs a web search and returns results in JSON format.
+    /// </summary>
+    /// <param name="args">Search parameters including query and result count</param>
+    /// <returns>JSON-formatted search results or error message</returns>
     public async Task<string> SearchJsonAsync(BrowserSearchArgs args)
     {
-        _logger.LogInformation("Browser searchjson: {Query}", args.Query);
+        _logger.LogInformation("Performing JSON web search for query: {Query}", args.Query);
 
         try
         {
             if (string.IsNullOrEmpty(_braveOptions.ApiKey))
             {
-                _logger.LogWarning("Brave Search API key not configured");
+                _logger.LogWarning("Brave Search API key not configured for JSON search");
                 return JsonSerializer.Serialize(new { 
                     error = "Browser search is not available. The Brave Search API key is not configured. Please contact the administrator to set up the API key in the application configuration." 
                 });
@@ -75,6 +97,7 @@ public class BrowserService
 
                 // Store URL mapping for later use in open function
                 UpdateLinkIdMapping(results.Web.Results.Take(args.TopN ?? 10).ToList());
+                _logger.LogInformation("JSON search completed successfully, returned {Count} results", simplifiedResults.Count);
             }
 
             return JsonSerializer.Serialize(new
@@ -86,14 +109,19 @@ public class BrowserService
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Error performing browser searchjson");
+            _logger.LogError(ex, "Error performing JSON browser search for query: {Query}", args.Query);
             return JsonSerializer.Serialize(new { error = $"Failed to perform search: {ex.Message}" });
         }
     }
 
+    /// <summary>
+    /// Opens a web page or scrolls to a location on an existing page.
+    /// </summary>
+    /// <param name="args">Open parameters including URL/ID, cursor, and location</param>
+    /// <returns>Formatted page content or error message</returns>
     public async Task<string> OpenAsync(BrowserOpenArgs args)
     {
-        _logger.LogInformation("Browser open: Id={Id}, Cursor={Cursor}, Loc={Loc}", args.Id, args.Cursor, args.Loc);
+        _logger.LogInformation("Opening page - Id: {Id}, Cursor: {Cursor}, Location: {Loc}", args.Id, args.Cursor, args.Loc);
 
         try
         {
@@ -103,16 +131,17 @@ public class BrowserService
             if (args.Id is string urlString)
             {
                 url = urlString;
+                _logger.LogDebug("Using direct URL: {Url}", url);
             }
             else if (args.Id is int linkId && linkId > 0)
             {
-                // In a real implementation, you'd maintain a mapping of link IDs to URLs
-                // from previous search results
                 url = GetUrlFromLinkId(linkId);
+                _logger.LogDebug("Resolved link ID {LinkId} to URL: {Url}", linkId, url);
             }
             else if (args.Cursor.HasValue && args.Cursor > 0 && _pages.ContainsKey(args.Cursor.Value))
             {
                 // Scrolling on existing page
+                _logger.LogDebug("Scrolling on existing page with cursor: {Cursor}", args.Cursor.Value);
                 return ScrollToLocation(_pages[args.Cursor.Value], args.Loc ?? -1, args.NumLines ?? 20);
             }
             else
@@ -137,20 +166,26 @@ public class BrowserService
             };
 
             _pages[page.Cursor] = page;
+            _logger.LogInformation("Successfully loaded page '{Title}' with cursor {Cursor}", page.Title, page.Cursor);
 
             // Return the formatted page content
             return FormatPageContent(page, args.Loc ?? 1, args.NumLines ?? 20);
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Error opening page");
+            _logger.LogError(ex, "Error opening page with args: {@Args}", args);
             return "Error: Failed to open page. Please check the URL and try again.";
         }
     }
 
+    /// <summary>
+    /// Opens a web page and returns content in JSON format, or scrolls to a location on an existing page.
+    /// </summary>
+    /// <param name="args">Open parameters including URL/ID, cursor, and location</param>
+    /// <returns>JSON-formatted page content or error message</returns>
     public async Task<string> OpenJsonAsync(BrowserOpenArgs args)
     {
-        _logger.LogInformation("Browser openjson: Id={Id}, Cursor={Cursor}, Loc={Loc}", args.Id, args.Cursor, args.Loc);
+        _logger.LogInformation("Opening page for JSON response - Id: {Id}, Cursor: {Cursor}, Location: {Loc}", args.Id, args.Cursor, args.Loc);
 
         try
         {
@@ -160,12 +195,12 @@ public class BrowserService
             if (args.Id is string urlString)
             {
                 url = urlString;
+                _logger.LogDebug("Using direct URL for JSON: {Url}", url);
             }
             else if (args.Id is int linkId && linkId > 0)
             {
-                // In a real implementation, you'd maintain a mapping of link IDs to URLs
-                // from previous search results
                 url = GetUrlFromLinkId(linkId);
+                _logger.LogDebug("Resolved link ID {LinkId} to URL for JSON: {Url}", linkId, url);
             }
             else if (args.Cursor.HasValue && args.Cursor > 0 && _pages.ContainsKey(args.Cursor.Value))
             {
@@ -173,6 +208,7 @@ public class BrowserService
                 var existingPage = _pages[args.Cursor.Value];
                 var scrollResult = ScrollToLocation(existingPage, args.Loc ?? -1, args.NumLines ?? 20);
                 
+                _logger.LogDebug("Returning JSON scroll result for cursor: {Cursor}", args.Cursor.Value);
                 return JsonSerializer.Serialize(new
                 {
                     cursor = existingPage.Cursor,
@@ -206,6 +242,7 @@ public class BrowserService
             };
 
             _pages[page.Cursor] = page;
+            _logger.LogInformation("Successfully loaded page '{Title}' for JSON response with cursor {Cursor}", page.Title, page.Cursor);
 
             // Return the page data in JSON format
             var startLine = args.Loc ?? 1;
@@ -230,14 +267,19 @@ public class BrowserService
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Error opening page for JSON");
+            _logger.LogError(ex, "Error opening page for JSON with args: {@Args}", args);
             return JsonSerializer.Serialize(new { error = $"Failed to open page: {ex.Message}" });
         }
     }
 
+    /// <summary>
+    /// Searches for a pattern within a loaded page.
+    /// </summary>
+    /// <param name="args">Find parameters including pattern and cursor</param>
+    /// <returns>Formatted search results or error message</returns>
     public Task<string> FindAsync(BrowserFindArgs args)
     {
-        _logger.LogInformation("Browser find: Pattern={Pattern}, Cursor={Cursor}", args.Pattern, args.Cursor);
+        _logger.LogInformation("Searching for pattern '{Pattern}' in page with cursor: {Cursor}", args.Pattern, args.Cursor);
 
         try
         {
@@ -247,11 +289,13 @@ public class BrowserService
             if (cursor > 0 && _pages.ContainsKey(cursor))
             {
                 page = _pages[cursor];
+                _logger.LogDebug("Using specific page with cursor: {Cursor}", cursor);
             }
             else
             {
                 // Use the most recent page
                 page = _pages.Values.OrderByDescending(p => p.LoadedAt).FirstOrDefault();
+                _logger.LogDebug("Using most recent page");
             }
 
             if (page == null)
@@ -260,15 +304,22 @@ public class BrowserService
             }
 
             var results = FindInPage(page, args.Pattern);
+            _logger.LogInformation("Found {Count} matches for pattern '{Pattern}' in page '{Title}'", results.Count, args.Pattern, page.Title);
             return Task.FromResult(FormatFindResults(page, results, args.Pattern));
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Error finding in page");
+            _logger.LogError(ex, "Error searching for pattern '{Pattern}' with cursor: {Cursor}", args.Pattern, args.Cursor);
             return Task.FromResult("Error: Failed to search in page.");
         }
     }
 
+    /// <summary>
+    /// Calls the Brave Search API to perform web search.
+    /// </summary>
+    /// <param name="query">Search query</param>
+    /// <param name="count">Number of results to return</param>
+    /// <returns>Brave search response or null if failed</returns>
     private async Task<BraveSearchResponse?> CallBraveSearchApiAsync(string query, int count)
     {
         try
@@ -299,7 +350,7 @@ public class BrowserService
                 jsonContent = await response.Content.ReadAsStringAsync();
             }
             
-            _logger.LogDebug("Brave Search API response: {Response}", jsonContent);
+            _logger.LogDebug("Received Brave Search API response with length: {Length}", jsonContent.Length);
 
             var searchResponse = JsonSerializer.Deserialize<BraveSearchResponse>(jsonContent, new JsonSerializerOptions
             {
@@ -310,21 +361,27 @@ public class BrowserService
         }
         catch (HttpRequestException ex)
         {
-            _logger.LogError(ex, "HTTP error calling Brave Search API");
+            _logger.LogError(ex, "HTTP error calling Brave Search API for query: {Query}", query);
             throw;
         }
         catch (JsonException ex)
         {
-            _logger.LogError(ex, "Error parsing Brave Search API response");
+            _logger.LogError(ex, "Error parsing Brave Search API response for query: {Query}", query);
             throw;
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Unexpected error calling Brave Search API");
+            _logger.LogError(ex, "Unexpected error calling Brave Search API for query: {Query}", query);
             throw;
         }
     }
 
+    /// <summary>
+    /// Formats Brave Search API results into a readable text format.
+    /// </summary>
+    /// <param name="response">Brave search response</param>
+    /// <param name="requestedCount">Number of results requested</param>
+    /// <returns>Formatted search results</returns>
     private string FormatBraveSearchResults(BraveSearchResponse? response, int requestedCount)
     {
         if (response?.Web?.Results == null || !response.Web.Results.Any())
@@ -356,8 +413,10 @@ public class BrowserService
         return string.Join("\n", formatted);
     }
 
-    private readonly Dictionary<int, string> _linkIdToUrlMapping = new();
-
+    /// <summary>
+    /// Updates the internal mapping of link IDs to URLs from search results.
+    /// </summary>
+    /// <param name="results">Search results to extract URLs from</param>
     private void UpdateLinkIdMapping(List<BraveSearchResult> results)
     {
         // Clear previous mappings and store new ones
@@ -368,17 +427,25 @@ public class BrowserService
             var linkId = i + 1;
             _linkIdToUrlMapping[linkId] = results[i].Url;
         }
+        _logger.LogDebug("Updated link ID mapping with {Count} URLs", results.Count);
     }
 
+    /// <summary>
+    /// Fetches content from a web page URL.
+    /// </summary>
+    /// <param name="url">URL to fetch</param>
+    /// <returns>Cleaned HTML content or simulated content if fetch fails</returns>
     private async Task<string> FetchPageContentAsync(string url)
     {
         try
         {
+            _logger.LogDebug("Fetching content from URL: {Url}", url);
             var response = await _httpClient.GetStringAsync(url);
             return CleanHtmlContent(response);
         }
-        catch
+        catch (Exception ex)
         {
+            _logger.LogWarning(ex, "Failed to fetch content from URL: {Url}, returning simulated content", url);
             // Return simulated content if actual fetch fails
             return $@"
 <html>
@@ -393,6 +460,11 @@ public class BrowserService
         }
     }
 
+    /// <summary>
+    /// Cleans HTML content by removing scripts, styles, and tags.
+    /// </summary>
+    /// <param name="html">Raw HTML content</param>
+    /// <returns>Cleaned text content</returns>
     private string CleanHtmlContent(string html)
     {
         // Simple HTML cleaning - remove tags and decode entities
@@ -404,12 +476,22 @@ public class BrowserService
         return text.Trim();
     }
 
+    /// <summary>
+    /// Extracts the title from HTML content.
+    /// </summary>
+    /// <param name="content">HTML content</param>
+    /// <returns>Page title or default if not found</returns>
     private string ExtractTitle(string content)
     {
         var titleMatch = Regex.Match(content, @"<title[^>]*>(.*?)</title>", RegexOptions.IgnoreCase);
         return titleMatch.Success ? titleMatch.Groups[1].Value : "Untitled Page";
     }
 
+    /// <summary>
+    /// Splits content into numbered lines for easier navigation.
+    /// </summary>
+    /// <param name="content">Text content</param>
+    /// <returns>List of numbered lines</returns>
     private List<string> SplitIntoLines(string content)
     {
         return content.Split('\n')
@@ -418,6 +500,13 @@ public class BrowserService
             .ToList();
     }
 
+    /// <summary>
+    /// Formats page content for display with line numbers and navigation info.
+    /// </summary>
+    /// <param name="page">Browser page to format</param>
+    /// <param name="startLine">Starting line number</param>
+    /// <param name="numLines">Number of lines to display</param>
+    /// <returns>Formatted page content</returns>
     private string FormatPageContent(BrowserPage page, int startLine, int numLines)
     {
         var lines = new List<string>
@@ -443,11 +532,24 @@ public class BrowserService
         return string.Join("\n", lines);
     }
 
+    /// <summary>
+    /// Scrolls to a specific location on a page.
+    /// </summary>
+    /// <param name="page">Browser page</param>
+    /// <param name="loc">Location to scroll to</param>
+    /// <param name="numLines">Number of lines to display</param>
+    /// <returns>Formatted page content at the specified location</returns>
     private string ScrollToLocation(BrowserPage page, int loc, int numLines)
     {
         return FormatPageContent(page, loc > 0 ? loc : 1, numLines);
     }
 
+    /// <summary>
+    /// Finds all occurrences of a pattern within a page.
+    /// </summary>
+    /// <param name="page">Browser page to search</param>
+    /// <param name="pattern">Search pattern</param>
+    /// <returns>List of find results</returns>
     private List<BrowserFindResult> FindInPage(BrowserPage page, string pattern)
     {
         var results = new List<BrowserFindResult>();
@@ -472,6 +574,13 @@ public class BrowserService
         return results;
     }
 
+    /// <summary>
+    /// Formats find results for display.
+    /// </summary>
+    /// <param name="page">Browser page that was searched</param>
+    /// <param name="results">Find results</param>
+    /// <param name="pattern">Search pattern</param>
+    /// <returns>Formatted find results</returns>
     private string FormatFindResults(BrowserPage page, List<BrowserFindResult> results, string pattern)
     {
         if (!results.Any())
@@ -498,6 +607,11 @@ public class BrowserService
         return string.Join("\n", lines);
     }
 
+    /// <summary>
+    /// Gets URL from link ID using the stored mapping from search results.
+    /// </summary>
+    /// <param name="linkId">Link ID from search results</param>
+    /// <returns>Corresponding URL or fallback URL</returns>
     private string GetUrlFromLinkId(int linkId)
     {
         // Use the stored mapping from the last search results

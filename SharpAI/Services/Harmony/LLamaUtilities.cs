@@ -5,8 +5,17 @@ using System.Text.Json;
 
 namespace SharpAI.Services.Harmony;
 
+/// <summary>
+/// Utility functions for LLamaSharp integration and token management.
+/// Provides token estimation, tool call conversion, and inference parameter configuration.
+/// </summary>
 public static class LLamaUtilities
 {
+    /// <summary>
+    /// Estimates the number of tokens in a text string.
+    /// </summary>
+    /// <param name="text">Text to estimate tokens for</param>
+    /// <returns>Estimated token count</returns>
     public static int EstimateTokens(string text)
     {
         if (string.IsNullOrEmpty(text)) return 0;
@@ -16,6 +25,12 @@ public static class LLamaUtilities
         return (int)Math.Ceiling(text.Length / 4.0);
     }
 
+    /// <summary>
+    /// Estimates reasoning tokens based on content and effort level.
+    /// </summary>
+    /// <param name="reasoning">Reasoning content</param>
+    /// <param name="level">Reasoning effort level</param>
+    /// <returns>Adjusted token count for reasoning</returns>
     public static int EstimateReasoningTokens(string reasoning, ReasoningEffortLevel level)
     {
         if (string.IsNullOrEmpty(reasoning)) return 0;
@@ -32,6 +47,11 @@ public static class LLamaUtilities
         };
     }
 
+    /// <summary>
+    /// Converts Harmony tool calls to OpenAI-compatible format.
+    /// </summary>
+    /// <param name="harmonyToolCalls">Harmony tool calls to convert</param>
+    /// <returns>List of OpenAI-compatible tool calls</returns>
     public static List<ToolCall> ConvertHarmonyToolCalls(List<HarmonyToolCall> harmonyToolCalls)
     {
         var toolCalls = new List<ToolCall>();
@@ -63,6 +83,12 @@ public static class LLamaUtilities
         return toolCalls;
     }
 
+    /// <summary>
+    /// Creates inference parameters for LLamaSharp from a chat completion request.
+    /// </summary>
+    /// <param name="request">Chat completion request containing generation parameters</param>
+    /// <param name="modelInstance">Model instance for context</param>
+    /// <returns>Configured inference parameters for LLamaSharp</returns>
     public static InferenceParams CreateInferenceParams(ChatCompletionRequest request, ModelInstance modelInstance)
     {
         // Build stop sequences list
@@ -118,10 +144,9 @@ public static class LLamaUtilities
                     jsonGrammar = new LLama.Sampling.Grammar(grammarText, "root");
                 }
             }
-            catch (Exception ex)
+            catch (Exception)
             {
-                // Log warning but continue without grammar
-                System.Console.WriteLine($"Warning: Failed to load JSON grammar: {ex.Message}");
+                // Failed to load JSON grammar; continue without grammar
             }
         }
 
@@ -145,16 +170,28 @@ public static class LLamaUtilities
         return inferenceParams;
     }
 
+    /// <summary>
+    /// Creates a unique completion ID in OpenAI format.
+    /// </summary>
+    /// <returns>Completion ID string</returns>
     public static string CreateCompletionId()
     {
         return $"chatcmpl-{Guid.NewGuid():N}";
     }
 
+    /// <summary>
+    /// Gets the current Unix timestamp for API responses.
+    /// </summary>
+    /// <returns>Unix timestamp in seconds</returns>
     public static long GetCurrentUnixTimestamp()
     {
         return DateTimeOffset.UtcNow.ToUnixTimeSeconds();
     }
 
+    /// <summary>
+    /// Provides JSON grammar definition for structured output parsing.
+    /// </summary>
+    /// <returns>JSON grammar string for LLamaSharp</returns>
     private static string GetJsonGrammar()
     {
         // Inline JSON grammar for structured output

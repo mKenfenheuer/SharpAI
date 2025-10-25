@@ -3,15 +3,29 @@ using SharpAI.Models;
 
 namespace SharpAI.Services.Harmony;
 
+/// <summary>
+/// Parses Harmony format responses from language models.
+/// Handles incremental streaming, message extraction, and tool call identification.
+/// </summary>
 public class HarmonyParser
 {
     private readonly ILogger<HarmonyParser> _logger;
 
+    /// <summary>
+    /// Initializes a new instance of the HarmonyParser.
+    /// </summary>
+    /// <param name="logger">Logger for parser operations</param>
     public HarmonyParser(ILogger<HarmonyParser> logger)
     {
         _logger = logger;
     }
 
+    /// <summary>
+    /// Parses incremental response tokens and updates stream state.
+    /// </summary>
+    /// <param name="state">Current stream state</param>
+    /// <param name="newToken">New token to process</param>
+    /// <returns>Delta containing changes in this parsing step</returns>
     public HarmonyStreamDelta ParseIncrementalResponse(HarmonyStreamState state, string newToken)
     {
         var delta = new HarmonyStreamDelta();
@@ -26,6 +40,7 @@ public class HarmonyParser
             state.CompletionReason = "tool_calls";
             delta.IsComplete = true;
             delta.CompletionReason = "tool_calls";
+            _logger.LogDebug("Detected tool call completion token");
         }
         else if (state.RawResponse.Contains("<|return|>"))
         {
@@ -33,6 +48,7 @@ public class HarmonyParser
             state.CompletionReason = "stop";
             delta.IsComplete = true;
             delta.CompletionReason = "stop";
+            _logger.LogDebug("Detected stop completion token");
         }
 
         // Parse current messages
@@ -117,11 +133,17 @@ public class HarmonyParser
         if (newToolCalls.Any())
         {
             delta.NewToolCalls = newToolCalls;
+            _logger.LogDebug("Found {Count} new tool calls", newToolCalls.Count);
         }
 
         return delta;
     }
 
+    /// <summary>
+    /// Parses a complete Harmony response and extracts all components.
+    /// </summary>
+    /// <param name="rawResponse">Complete raw response to parse</param>
+    /// <returns>Parsed response with content, reasoning, and tool calls</returns>
     public ParsedResponse ParseCompleteResponse(string rawResponse)
     {
         var response = new ParsedResponse
@@ -132,6 +154,7 @@ public class HarmonyParser
             ToolCalls = new List<HarmonyToolCall>()
         };
 
+        _logger.LogDebug("Parsing complete response with length: {Length}", rawResponse.Length);
         try
         {
             var messages = ParseHarmonyMessages(rawResponse);
@@ -191,9 +214,10 @@ public class HarmonyParser
             {
                 _logger.LogDebug("No final channel content found, extracting from raw response");
                 response.Content = ExtractUserReadableContent(rawResponse);
-                _logger.LogDebug("Extracted user-readable content: {Content}", response.Content);
             }
 
+            _logger.LogInformation("Parsed response with {ToolCallCount} tool calls and {ContentLength} characters of content", 
+                response.ToolCalls.Count, response.Content?.Length ?? 0);
             return response;
         }
         catch (Exception ex)
@@ -204,6 +228,11 @@ public class HarmonyParser
         }
     }
 
+    /// <summary>
+    /// Parses Harmony messages from the response text using regex patterns.
+    /// </summary>
+    /// <param name="response">Raw response text to parse</param>
+    /// <returns>List of parsed Harmony messages</returns>
     private List<HarmonyMessage> ParseHarmonyMessages(string response)
     {
         var messages = new List<HarmonyMessage>();
@@ -256,9 +285,15 @@ public class HarmonyParser
             }
         }
 
+        _logger.LogDebug("Parsed {MessageCount} Harmony messages from response", messages.Count);
         return messages;
     }
 
+    /// <summary>
+    /// Extracts user-readable content from raw response as fallback.
+    /// </summary>
+    /// <param name="rawResponse">Raw response text</param>
+    /// <returns>Extracted user-readable content</returns>
     private string ExtractUserReadableContent(string rawResponse)
     {
         try

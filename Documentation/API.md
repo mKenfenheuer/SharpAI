@@ -1,90 +1,76 @@
 # API Documentation
 
-SharpAI provides an OpenAI-compatible REST API for chat completions and audio transcription. All endpoints follow OpenAI's API specifications for seamless integration with existing applications.
+SharpAI provides OpenAI-compatible REST APIs for chat completions, audio transcription, and model management. All endpoints follow OpenAI's API specifications for seamless integration.
 
 ## Base URL
 
 ```
-http://localhost:5000
+http://localhost:5000/v1
 ```
 
 ## Authentication
 
-Currently, SharpAI does not require authentication. This may be added in future versions.
+Currently, SharpAI does not require authentication. In production environments, consider implementing proper authentication and authorization mechanisms.
 
-## Content Types
+## API Endpoints
 
-- **Request**: `application/json` (for most endpoints)
-- **Request**: `multipart/form-data` (for audio uploads)
-- **Response**: `application/json`
+### Chat Completions
 
----
+#### Create Chat Completion
 
-## Chat Completions
+Creates a chat completion, either as a single response or a stream.
 
-### POST /v1/chat/completions
+**Endpoint:** `POST /v1/chat/completions`
 
-Generate chat completions using various language models.
-
-#### Request Body
+**Request Body:**
 
 ```json
 {
-  "model": "string",           // Required: Model to use
-  "messages": [                // Required: Conversation messages
+  "model": "string",
+  "messages": [
     {
-      "role": "string",        // "system", "user", or "assistant"
-      "content": "string"      // Message content
+      "role": "system|user|assistant",
+      "content": "string"
     }
   ],
-  "max_tokens": 150,           // Optional: Maximum tokens to generate
-  "temperature": 0.7,          // Optional: Sampling temperature (0.0 to 2.0)
-  "top_p": 1.0,               // Optional: Nucleus sampling parameter
-  "n": 1,                     // Optional: Number of completions to generate
-  "stream": false,            // Optional: Whether to stream responses
-  "stop": ["string"],         // Optional: Stop sequences
-  "presence_penalty": 0.0,    // Optional: Presence penalty (-2.0 to 2.0)
-  "frequency_penalty": 0.0,   // Optional: Frequency penalty (-2.0 to 2.0)
-  "tools": [                  // Optional: Available tools/functions
-    {
-      "type": "function",
-      "function": {
-        "name": "string",
-        "description": "string",
-        "parameters": {
-          "type": "object",
-          "properties": {
-            "param_name": {
-              "type": "string",
-              "description": "string"
-            }
-          },
-          "required": ["param_name"]
-        }
-      }
-    }
-  ],
-  "tool_choice": "auto",      // Optional: Tool choice behavior
-  "response_format": {        // Optional: Response format specification
-    "type": "json_object"
+  "stream": false,
+  "temperature": 0.7,
+  "max_tokens": 1000,
+  "top_p": 1.0,
+  "frequency_penalty": 0.0,
+  "presence_penalty": 0.0,
+  "response_format": {
+    "type": "text|json_object"
   }
 }
 ```
 
-#### Response
+**Parameters:**
+
+- `model` (required): The model to use for completion
+- `messages` (required): Array of messages in the conversation
+- `stream` (optional): Whether to stream the response. Default: `false`
+- `temperature` (optional): Sampling temperature (0-2). Default: `0.7`
+- `max_tokens` (optional): Maximum tokens to generate
+- `top_p` (optional): Nucleus sampling parameter. Default: `1.0`
+- `frequency_penalty` (optional): Frequency penalty (-2 to 2). Default: `0.0`
+- `presence_penalty` (optional): Presence penalty (-2 to 2). Default: `0.0`
+- `response_format` (optional): Format of the response
+
+**Non-Streaming Response:**
 
 ```json
 {
-  "id": "chatcmpl-abc123",
+  "id": "chatcmpl-123",
   "object": "chat.completion",
-  "created": 1677858242,
-  "model": "llama-3.2-3b-instruct",
+  "created": 1677652288,
+  "model": "default",
   "choices": [
     {
       "index": 0,
       "message": {
         "role": "assistant",
-        "content": "Hello! I'm doing well, thank you for asking."
+        "content": "Hello! How can I help you today?"
       },
       "finish_reason": "stop"
     }
@@ -97,333 +83,296 @@ Generate chat completions using various language models.
 }
 ```
 
-#### Streaming Response
+**Streaming Response:**
 
-When `stream: true` is set, responses are sent as Server-Sent Events:
+When `stream: true`, the response is sent as Server-Sent Events:
 
 ```
-data: {"id":"chatcmpl-abc123","object":"chat.completion.chunk","created":1677858242,"model":"llama-3.2-3b-instruct","choices":[{"index":0,"delta":{"role":"assistant","content":"Hello"},"finish_reason":null}]}
+data: {"id":"chatcmpl-123","object":"chat.completion.chunk","created":1677652288,"model":"default","choices":[{"index":0,"delta":{"role":"assistant","content":"Hello"},"finish_reason":null}]}
 
-data: {"id":"chatcmpl-abc123","object":"chat.completion.chunk","created":1677858242,"model":"llama-3.2-3b-instruct","choices":[{"index":0,"delta":{"content":"!"},"finish_reason":null}]}
+data: {"id":"chatcmpl-123","object":"chat.completion.chunk","created":1677652288,"model":"default","choices":[{"index":0,"delta":{"content":"!"},"finish_reason":null}]}
+
+data: {"id":"chatcmpl-123","object":"chat.completion.chunk","created":1677652288,"model":"default","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}
 
 data: [DONE]
 ```
 
-#### Example Request
+**Example cURL:**
 
 ```bash
+# Non-streaming request
 curl -X POST http://localhost:5000/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "llama-3.2-3b-instruct",
+    "model": "default",
     "messages": [
-      {"role": "system", "content": "You are a helpful assistant."},
-      {"role": "user", "content": "Explain quantum computing in simple terms."}
+      {"role": "user", "content": "Hello, how are you?"}
     ],
-    "max_tokens": 200,
-    "temperature": 0.7,
-    "stream": false
+    "stream": false,
+    "temperature": 0.7
+  }'
+
+# Streaming request
+curl -X POST http://localhost:5000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "default",
+    "messages": [
+      {"role": "user", "content": "Tell me a story"}
+    ],
+    "stream": true
   }'
 ```
 
----
+#### Test Request (Development)
 
-## Audio Transcriptions
+Test endpoint for debugging request parsing.
 
-### POST /v1/audio/transcriptions
+**Endpoint:** `POST /v1/chat/test-request`
 
-Transcribe audio files to text using Whisper models.
+Returns the parsed request structure without generating a completion.
 
-#### Request
+### Audio
 
-- **Content-Type**: `multipart/form-data`
-- **file**: Audio file (required)
-- **model**: Whisper model name (required)
-- **prompt**: Optional transcription guide
-- **response_format**: Response format (optional, default: "json")
-- **temperature**: Sampling temperature (optional, 0.0 to 1.0)
-- **language**: Source language (optional, ISO-639-1 format)
+#### Create Transcription
 
-#### Supported Audio Formats
+Transcribes audio to text using Whisper models.
 
-- MP3
-- MP4
-- MPEG
-- MPGA
-- M4A
-- WAV
-- WEBM
-- Any format supported by FFmpeg
+**Endpoint:** `POST /v1/audio/transcriptions`
 
-#### Response
+**Request:** Multipart form data
+
+**Parameters:**
+
+- `file` (required): Audio file to transcribe
+- `model` (required): Model to use (e.g., "whisper-1")
+- `language` (optional): Language of the audio (ISO-639-1 code)
+- `prompt` (optional): Optional text to guide the model's style
+- `response_format` (optional): Format of the response (`json`, `text`, `srt`, `verbose_json`, `vtt`)
+- `temperature` (optional): Sampling temperature (0-1)
+- `timestamp_granularities` (optional): Timestamp granularities (`word`, `segment`)
+- `stream` (optional): Whether to stream the transcription (custom extension)
+
+**Supported Audio Formats:**
+- MP3 (`audio/mpeg`)
+- MP4 (`audio/mp4`)
+- WAV (`audio/wav`)
+- WebM (`audio/webm`)
+- M4A (`audio/m4a`)
+- OGG (`audio/ogg`)
+- FLAC (`audio/flac`)
+
+**Response (JSON format):**
 
 ```json
 {
-  "text": "This is the transcribed text from the audio file.",
+  "text": "Hello, this is a test transcription.",
   "segments": [
     {
       "id": 0,
-      "start": 0.0,
-      "end": 2.5,
-      "text": "This is the transcribed text"
-    },
-    {
-      "id": 1,
-      "start": 2.5,
-      "end": 5.0,
-      "text": " from the audio file."
+      "start": 0,
+      "end": 2000,
+      "text": "Hello, this is a test transcription.",
+      "avg_logprob": -0.45,
+      "compression_ratio": 1.2,
+      "no_speech_prob": 0.01,
+      "temperature": 0.0
     }
-  ]
+  ],
+  "language": "en"
 }
 ```
 
-#### Example Request
+**Response (Text format):**
 
-```bash
-curl -X POST http://localhost:5000/v1/audio/transcriptions \
-  -H "Content-Type: multipart/form-data" \
-  -F "file=@meeting_recording.mp3" \
-  -F "model=whisper-base" \
-  -F "response_format=json" \
-  -F "language=en"
+```
+Hello, this is a test transcription.
 ```
 
----
+**Response (SRT format):**
 
-## Models
+```
+1
+00:00:00,000 --> 00:00:02,000
+Hello, this is a test transcription.
+```
 
-### GET /v1/models
+**Response (VTT format):**
 
-List all available models (chat and audio).
+```
+WEBVTT
 
-#### Response
+00:00:00.000 --> 00:00:02.000
+Hello, this is a test transcription.
+```
+
+**Example cURL:**
+
+```bash
+# Basic transcription
+curl -X POST http://localhost:5000/v1/audio/transcriptions \
+  -F "file=@audio.mp3" \
+  -F "model=whisper-1"
+
+# With language and response format
+curl -X POST http://localhost:5000/v1/audio/transcriptions \
+  -F "file=@audio.wav" \
+  -F "model=whisper-1" \
+  -F "language=en" \
+  -F "response_format=verbose_json"
+
+# SRT subtitle format
+curl -X POST http://localhost:5000/v1/audio/transcriptions \
+  -F "file=@speech.m4a" \
+  -F "model=whisper-1" \
+  -F "response_format=srt"
+```
+
+### Models
+
+#### List Models
+
+Lists all available models.
+
+**Endpoint:** `GET /v1/models`
+
+**Response:**
 
 ```json
 {
   "object": "list",
   "data": [
     {
-      "id": "llama-3.2-3b-instruct",
+      "id": "default",
       "object": "model",
-      "created": 1677858242,
-      "owned_by": "meta",
-      "type": "chat"
+      "created": 1677652288,
+      "owned_by": "huggingface"
     },
     {
-      "id": "whisper-base",
+      "id": "whisper-1",
       "object": "model",
-      "created": 1677858242,
-      "owned_by": "openai",
-      "type": "audio"
+      "created": 1677652288,
+      "owned_by": "openai"
     }
   ]
 }
 ```
 
-### GET /v1/models/chat
+**Example cURL:**
 
-List available chat completion models.
+```bash
+curl http://localhost:5000/v1/models
+```
 
-### GET /v1/models/audio
+## Advanced Features
 
-List available audio transcription models.
+### Tool Calling and Browser Integration
 
----
+SharpAI supports advanced tool calling capabilities through the Harmony system, including:
 
-## Function Calling
+- **Web Search**: Automatically search the web using Brave Search API
+- **Browser Automation**: Navigate and extract content from web pages
+- **Recursive Tool Calling**: Tools can call other tools to complete complex tasks
 
-SharpAI supports OpenAI-style function calling for chat completions.
+Tool calling is automatically triggered based on the conversation context and user requests.
 
-### Function Definition
+### Streaming with Tool Integration
+
+When using streaming mode with tool calling:
+
+1. The model generates a response
+2. If tools are needed, they are executed automatically
+3. Tool results are fed back to the model
+4. The model continues generating with the new context
+5. The final response is streamed to the client
+
+### Response Formats
+
+#### JSON Mode
+
+For structured responses, use `response_format.type = "json_object"`:
 
 ```json
 {
-  "tools": [
-    {
-      "type": "function",
-      "function": {
-        "name": "get_current_weather",
-        "description": "Get the current weather in a given location",
-        "parameters": {
-          "type": "object",
-          "properties": {
-            "location": {
-              "type": "string",
-              "description": "The city and state, e.g. San Francisco, CA"
-            },
-            "unit": {
-              "type": "string",
-              "enum": ["celsius", "fahrenheit"],
-              "description": "The temperature unit to use"
-            }
-          },
-          "required": ["location"]
-        }
-      }
-    }
+  "model": "default",
+  "messages": [
+    {"role": "user", "content": "Generate a JSON object with a person's name and age"}
   ],
-  "tool_choice": "auto"
-}
-```
-
-### Tool Choice Options
-
-- `"auto"`: Let the model decide whether to call functions
-- `"none"`: Don't call any functions
-- `{"type": "function", "function": {"name": "function_name"}}`: Force a specific function call
-
-### Function Call Response
-
-```json
-{
-  "choices": [
-    {
-      "message": {
-        "role": "assistant",
-        "content": null,
-        "tool_calls": [
-          {
-            "id": "call_abc123",
-            "type": "function",
-            "function": {
-              "name": "get_current_weather",
-              "arguments": "{\"location\": \"San Francisco, CA\", \"unit\": \"celsius\"}"
-            }
-          }
-        ]
-      },
-      "finish_reason": "tool_calls"
-    }
-  ]
-}
-```
-
----
-
-## Error Responses
-
-All endpoints return appropriate HTTP status codes and error messages:
-
-### 400 Bad Request
-
-```json
-{
-  "error": {
-    "message": "Invalid model specified. Available models: llama-3.2-3b-instruct, whisper-base",
-    "type": "invalid_request_error",
-    "code": "invalid_model"
-  }
-}
-```
-
-### 422 Unprocessable Entity
-
-```json
-{
-  "error": {
-    "message": "File upload required",
-    "type": "invalid_request_error",
-    "code": "missing_file"
-  }
-}
-```
-
-### 500 Internal Server Error
-
-```json
-{
-  "error": {
-    "message": "Model loading failed",
-    "type": "server_error",
-    "code": "model_error"
-  }
-}
-```
-
----
-
-## Rate Limits
-
-Currently, SharpAI does not implement rate limiting. This may be added in future versions based on deployment requirements.
-
----
-
-## Response Formats
-
-### JSON Response Format
-
-For structured JSON output, use the `response_format` parameter:
-
-```json
-{
   "response_format": {
     "type": "json_object"
   }
 }
 ```
 
-This instructs the model to return valid JSON in its response.
+## Error Handling
 
----
+All endpoints return standard HTTP status codes and error responses:
 
-## Model-Specific Notes
+**400 Bad Request:**
+```json
+{
+  "error": {
+    "message": "Invalid request format",
+    "type": "invalid_request_error"
+  }
+}
+```
 
-### Chat Models
+**500 Internal Server Error:**
+```json
+{
+  "error": {
+    "message": "Internal server error",
+    "type": "internal_error"
+  }
+}
+```
 
-- **llama-3.2-3b-instruct**: Best balance of speed and quality
-- **llama-3.2-1b-instruct**: Fastest option, good for simple tasks
-- **llama-3.2-3b-instruct-turbo**: Optimized for performance
-- **phi-3-mini-instruct**: Excellent instruction following
-- **gemma-2-2b-instruct**: Strong reasoning capabilities
+## Rate Limiting
 
-### Audio Models
+Currently, SharpAI does not implement rate limiting. In production environments, consider implementing rate limiting based on your requirements.
 
-- **whisper-tiny**: 39MB, ~32x realtime, lowest accuracy
-- **whisper-base**: 74MB, ~16x realtime, good for most use cases
-- **whisper-small**: 244MB, ~6x realtime, better accuracy
-- **whisper-medium**: 769MB, ~2x realtime, high accuracy
-- **whisper-large-v3**: 1550MB, ~1x realtime, best accuracy
+## OpenAI SDK Compatibility
 
-Choose models based on your speed vs. accuracy requirements.
+SharpAI is designed to be compatible with OpenAI's official SDKs. Simply change the base URL to point to your SharpAI instance:
 
----
-
-## SDK Integration
-
-SharpAI is compatible with existing OpenAI SDKs. Simply change the base URL:
-
-### Python (openai)
-
+**Python:**
 ```python
-import openai
+from openai import OpenAI
 
-client = openai.OpenAI(
+client = OpenAI(
     base_url="http://localhost:5000/v1",
-    api_key="not-required"  # Set to any value
+    api_key="not-needed"  # API key not required but SDK expects it
 )
 
+# Use as normal
 response = client.chat.completions.create(
-    model="llama-3.2-3b-instruct",
+    model="default",
     messages=[{"role": "user", "content": "Hello!"}]
 )
 ```
 
-### JavaScript/TypeScript
-
+**Node.js:**
 ```javascript
 import OpenAI from 'openai';
 
 const openai = new OpenAI({
-    baseURL: 'http://localhost:5000/v1',
-    apiKey: 'not-required'
+  baseURL: 'http://localhost:5000/v1',
+  apiKey: 'not-needed'
 });
 
 const response = await openai.chat.completions.create({
-    model: 'llama-3.2-3b-instruct',
-    messages: [{ role: 'user', content: 'Hello!' }]
+  model: 'default',
+  messages: [{ role: 'user', content: 'Hello!' }]
 });
 ```
 
-### curl
+## Custom Extensions
 
-All examples in this documentation use curl and can be run directly from the command line.
+SharpAI includes some custom extensions beyond the OpenAI API:
+
+- **Streaming Audio Transcription**: Set `stream: true` in audio transcription requests
+- **Advanced Tool Integration**: Automatic web search and browser automation
+- **Harmony Format**: Advanced prompt formatting for better model performance
+
+These extensions are designed to be backwards compatible and can be safely ignored by standard OpenAI clients.

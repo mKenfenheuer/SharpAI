@@ -9,18 +9,33 @@ using Whisper.net.Logger;
 
 namespace SharpAI.Services
 {
+    /// <summary>
+    /// Service for audio transcription using Whisper speech recognition models.
+    /// Supports multiple response formats, streaming transcription, and audio format conversion.
+    /// </summary>
     public class WhisperService : IDisposable
     {
         private readonly WhisperModelManager _modelManager;
         private readonly ILogger<WhisperService> _logger;
 
+        /// <summary>
+        /// Initializes a new instance of the WhisperService.
+        /// </summary>
+        /// <param name="modelManager">Whisper model manager for loading models</param>
+        /// <param name="logger">Logger for service operations</param>
         public WhisperService(WhisperModelManager modelManager, ILogger<WhisperService> logger)
         {
             _modelManager = modelManager;
             _logger = logger;
         }
 
-        public async Task<AudioTranscriptionResponse> TranscribeAsync(Stream audioStream, AudioTranscriptionRequest request)
+    /// <summary>
+    /// Transcribes an audio stream synchronously and returns the full transcription response.
+    /// </summary>
+    /// <param name="audioStream">Input audio stream</param>
+    /// <param name="request">Transcription request parameters</param>
+    /// <returns>Full transcription response</returns>
+    public async Task<AudioTranscriptionResponse> TranscribeAsync(Stream audioStream, AudioTranscriptionRequest request)
         {
             var modelName = request.Model ?? "whisper-1"; // Default to whisper-1 (base model)
             _logger.LogInformation("Using Whisper model: {ModelName}", modelName);
@@ -125,7 +140,13 @@ namespace SharpAI.Services
             }
         }
 
-        public async IAsyncEnumerable<AudioTranscriptionChunk> TranscribeStreamAsync(Stream audioStream, AudioTranscriptionRequest request)
+    /// <summary>
+    /// Streams transcription chunks as the audio is processed.
+    /// </summary>
+    /// <param name="audioStream">Input audio stream</param>
+    /// <param name="request">Transcription request parameters</param>
+    /// <returns>Async stream of transcription chunks</returns>
+    public async IAsyncEnumerable<AudioTranscriptionChunk> TranscribeStreamAsync(Stream audioStream, AudioTranscriptionRequest request)
         {
             var modelName = request.Model ?? "whisper-1"; // Default to whisper-1 (base model)
             _logger.LogInformation("Using Whisper model for streaming: {ModelName}", modelName);
@@ -179,7 +200,13 @@ namespace SharpAI.Services
             };
         }
 
-        public string FormatResponse(AudioTranscriptionResponse response, AudioResponseFormat format)
+    /// <summary>
+    /// Formats a transcription response into the requested output format (text, json, srt, vtt, etc.).
+    /// </summary>
+    /// <param name="response">Transcription response to format</param>
+    /// <param name="format">Desired output format</param>
+    /// <returns>Formatted transcription output</returns>
+    public string FormatResponse(AudioTranscriptionResponse response, AudioResponseFormat format)
         {
             return format switch
             {
@@ -199,6 +226,11 @@ namespace SharpAI.Services
             };
         }
 
+        /// <summary>
+        /// Formats subtitle timestamps for SRT format.
+        /// </summary>
+        /// <param name="segments">Transcription segments to format</param>
+        /// <returns>SRT-formatted subtitle string</returns>
         private string FormatAsSrt(List<TranscriptionSegment>? segments)
         {
             if (segments == null || segments.Count == 0)
@@ -216,6 +248,11 @@ namespace SharpAI.Services
             return srt.ToString();
         }
 
+        /// <summary>
+        /// Formats subtitle timestamps for WebVTT format.
+        /// </summary>
+        /// <param name="segments">Transcription segments to format</param>
+        /// <returns>WebVTT-formatted subtitle string</returns>
         private string FormatAsVtt(List<TranscriptionSegment>? segments)
         {
             if (segments == null || segments.Count == 0)
@@ -249,7 +286,13 @@ namespace SharpAI.Services
         /// <param name="inputAudioStream">Input audio stream in any format</param>
         /// <param name="inputFileName">Original filename to help determine format</param>
         /// <returns>Stream containing WAV 16kHz mono audio</returns>
-        public async Task<Stream> ConvertToWav16kHzAsync(Stream inputAudioStream, string inputFileName)
+    /// <summary>
+    /// Converts any audio format to WAV 16kHz mono format suitable for Whisper processing.
+    /// </summary>
+    /// <param name="inputAudioStream">Input audio stream in any format</param>
+    /// <param name="inputFileName">Original filename to help determine format</param>
+    /// <returns>Stream containing WAV 16kHz mono audio</returns>
+    public async Task<Stream> ConvertToWav16kHzAsync(Stream inputAudioStream, string inputFileName)
         {
             try
             {

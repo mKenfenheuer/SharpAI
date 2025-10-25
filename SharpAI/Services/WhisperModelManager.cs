@@ -6,6 +6,10 @@ using Whisper.net.Logger;
 
 namespace SharpAI.Services
 {
+    /// <summary>
+    /// Manages Whisper speech recognition models, including downloading and loading.
+    /// Supports multiple model sizes and OpenAI-compatible model naming.
+    /// </summary>
     public class WhisperModelManager : IDisposable
     {
         private readonly string _modelsDirectory;
@@ -17,6 +21,11 @@ namespace SharpAI.Services
 
         private IDisposable _whisperLogger;
 
+        /// <summary>
+        /// Initializes a new instance of the WhisperModelManager.
+        /// </summary>
+        /// <param name="logger">Logger for model manager operations</param>
+        /// <param name="instanceLogger">Logger for model instance operations</param>
         public WhisperModelManager(ILogger<WhisperModelManager> logger, ILogger<WhisperModelInstance> instanceLogger)
         {
             _logger = logger;
@@ -50,7 +59,12 @@ namespace SharpAI.Services
             _instanceLogger = instanceLogger;
         }
 
-        public async Task<WhisperModelInstance> GetModelAsync(string modelName)
+    /// <summary>
+    /// Retrieves a Whisper model instance, downloading and loading it if necessary.
+    /// </summary>
+    /// <param name="modelName">Requested model name (supports OpenAI-style and internal names)</param>
+    /// <returns>Loaded WhisperModelInstance</returns>
+    public async Task<WhisperModelInstance> GetModelAsync(string modelName)
         {
             // Normalize model name - handle OpenAI naming convention
             var normalizedModelName = NormalizeModelName(modelName);
@@ -82,6 +96,11 @@ namespace SharpAI.Services
             return modelInstance;
         }
 
+        /// <summary>
+        /// Normalizes model names to handle OpenAI API naming conventions.
+        /// </summary>
+        /// <param name="modelName">Original model name</param>
+        /// <returns>Normalized internal model name</returns>
         private string NormalizeModelName(string modelName)
         {
             // Handle OpenAI API model names (whisper-1 -> base)
@@ -101,6 +120,11 @@ namespace SharpAI.Services
             };
         }
 
+        /// <summary>
+        /// Ensures a Whisper model file exists locally, downloading it if necessary.
+        /// </summary>
+        /// <param name="config">Whisper model configuration</param>
+        /// <returns>Path to the local model file</returns>
         private async Task<string> EnsureModelFileAsync(WhisperModelConfiguration config)
         {
             var modelPath = Path.Combine(_modelsDirectory, config.Filename);
@@ -132,6 +156,11 @@ namespace SharpAI.Services
             }
         }
 
+        /// <summary>
+        /// Downloads a Whisper model using the official Whisper.net downloader.
+        /// </summary>
+        /// <param name="config">Whisper model configuration</param>
+        /// <param name="destinationPath">Local path to save the model</param>
         private async Task DownloadWhisperModelAsync(WhisperModelConfiguration config, string destinationPath)
         {
             _logger.LogInformation("Downloading Whisper model {ModelName} ({GgmlType}) - Size: ~{SizeMB} MB",
@@ -154,13 +183,13 @@ namespace SharpAI.Services
                     await fileWriter.WriteAsync(buffer, 0, bytesRead);
                     totalBytes += bytesRead;
 
-                    // Log progress every 30 seconds
-                    if (DateTime.UtcNow - lastLogTime > TimeSpan.FromSeconds(30))
-                    {
-                        _logger.LogInformation("Downloading Whisper {ModelName}: {DownloadedMB:F1} MB downloaded",
-                            config.Name, totalBytes / 1024.0 / 1024.0);
-                        lastLogTime = DateTime.UtcNow;
-                    }
+                        // Log progress every 30 seconds
+                        if (DateTime.UtcNow - lastLogTime > TimeSpan.FromSeconds(30))
+                        {
+                            _logger.LogDebug("Downloading Whisper {ModelName}: {DownloadedMB:F1} MB downloaded",
+                                config.Name, totalBytes / 1024.0 / 1024.0);
+                            lastLogTime = DateTime.UtcNow;
+                        }
                 }
 
                 _logger.LogInformation("Successfully downloaded Whisper model {ModelName} to {Path} ({TotalMB:F1} MB)",
@@ -180,6 +209,12 @@ namespace SharpAI.Services
             }
         }
 
+        /// <summary>
+        /// Loads a Whisper model from a local file into memory.
+        /// </summary>
+        /// <param name="config">Whisper model configuration</param>
+        /// <param name="modelPath">Path to the local model file</param>
+        /// <returns>Loaded Whisper model instance</returns>
         private async Task<WhisperModelInstance> LoadModelAsync(WhisperModelConfiguration config, string modelPath)
         {
             _logger.LogInformation("Loading Whisper model {ModelName} from {Path}", config.Name, modelPath);
@@ -211,6 +246,10 @@ namespace SharpAI.Services
             }
         }
 
+        /// <summary>
+        /// Loads Whisper model configuration with all available model sizes.
+        /// </summary>
+        /// <returns>Configuration with available Whisper models</returns>
         private WhisperModelsConfiguration LoadWhisperModelsConfiguration()
         {
             // Default configuration with different Whisper model sizes
@@ -344,11 +383,19 @@ namespace SharpAI.Services
             return defaultConfig;
         }
 
+        /// <summary>
+        /// Gets list of all available Whisper model names.
+        /// </summary>
+        /// <returns>List of available model names</returns>
         public List<string> GetAvailableModels()
         {
             return _modelsConfig.Models.Select(m => m.Name).ToList();
         }
 
+        /// <summary>
+        /// Unloads a Whisper model from memory and disposes resources.
+        /// </summary>
+        /// <param name="modelName">Name of the model to unload</param>
         public void UnloadModel(string modelName)
         {
             var normalizedName = NormalizeModelName(modelName);
@@ -371,6 +418,9 @@ namespace SharpAI.Services
         }
     }
 
+    /// <summary>
+    /// Configuration for a specific Whisper model variant.
+    /// </summary>
     public class WhisperModelConfiguration
     {
         public string Name { get; set; } = string.Empty;
@@ -382,11 +432,17 @@ namespace SharpAI.Services
         public string Accuracy { get; set; } = string.Empty;
     }
 
+    /// <summary>
+    /// Configuration container for all available Whisper models.
+    /// </summary>
     public class WhisperModelsConfiguration
     {
         public List<WhisperModelConfiguration> Models { get; set; } = new List<WhisperModelConfiguration>();
     }
 
+    /// <summary>
+    /// Represents a loaded Whisper model instance with factory and configuration.
+    /// </summary>
     public class WhisperModelInstance : IDisposable
     {
         public string Name { get; set; } = string.Empty;

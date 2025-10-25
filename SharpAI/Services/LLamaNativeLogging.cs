@@ -12,6 +12,9 @@ namespace SharpAI.Services
         private readonly NativeLogConfig.LLamaLogCallback _logCallback;
         private readonly ILogger<LLamaNativeLogging> _logger;
 
+        /// <summary>
+        /// Bridges native LLama logging into the Microsoft.Extensions.Logging pipeline.
+        /// </summary>
         public LLamaNativeLogging(ILogger<LLamaNativeLogging> logger)
         {
             _logger = logger;
@@ -24,7 +27,11 @@ namespace SharpAI.Services
             NativeLogConfig.llama_log_set(logCallback: null);
         }
 
-        private void OnLog(LLamaLogLevel level, string message)
+    /// <summary>
+    /// Callback invoked by native code to forward logs into the application logger.
+    /// Maps native levels to appropriate Microsoft.Extensions.Logging levels.
+    /// </summary>
+    private void OnLog(LLamaLogLevel level, string message)
         {
             switch (level)
             {

@@ -6,6 +6,10 @@ using System.Text;
 
 namespace SharpAI.Services;
 
+/// <summary>
+/// Service that manages model selection and generates chat completions using LLamaSharp backends.
+/// Provides both synchronous completion and streaming completion compatible with OpenAI-style responses.
+/// </summary>
 public class LLamaSharpService : IDisposable
 {
     private readonly LLamaModelManager _modelManager;
@@ -14,6 +18,14 @@ public class LLamaSharpService : IDisposable
     private readonly HarmonyParser _harmonyParser;
     private readonly HarmonyFormatter _harmonyFormatter;
 
+    /// <summary>
+    /// Initializes a new instance of the LLamaSharpService.
+    /// </summary>
+    /// <param name="modelManager">Model manager for loading and managing models</param>
+    /// <param name="logger">Logger for service operations</param>
+    /// <param name="streamingEngine">Streaming inference engine</param>
+    /// <param name="harmonyParser">Parser for harmony format responses</param>
+    /// <param name="harmonyFormatter">Formatter for harmony format prompts</param>
     public LLamaSharpService(
         LLamaModelManager modelManager, 
         ILogger<LLamaSharpService> logger,
@@ -28,6 +40,11 @@ public class LLamaSharpService : IDisposable
         _harmonyFormatter = harmonyFormatter;
     }
 
+    /// <summary>
+    /// Generates a chat completion for the provided request and returns the final response.
+    /// </summary>
+    /// <param name="request">Chat completion request</param>
+    /// <returns>Chat completion response</returns>
     public async Task<ChatCompletionResponse> GenerateChatCompletionAsync(ChatCompletionRequest request)
     {
         var requestedModel = request.Model ?? "gpt-4";
@@ -141,6 +158,11 @@ public class LLamaSharpService : IDisposable
         return response;
     }
 
+    /// <summary>
+    /// Generates a chat completion as an async stream of chunks. Each chunk follows the OpenAI streaming format.
+    /// </summary>
+    /// <param name="request">Chat completion request</param>
+    /// <returns>Async enumerable of chat completion chunks</returns>
     public async IAsyncEnumerable<ChatCompletionChunk> GenerateChatCompletionStreamAsync(ChatCompletionRequest request)
     {
         var requestedModel = request.Model ?? "gpt-4";
@@ -278,6 +300,11 @@ public class LLamaSharpService : IDisposable
         };
     }
 
+    /// <summary>
+    /// Ensures messages include a default system prompt and returns the prepared message list.
+    /// </summary>
+    /// <param name="messages">Original chat messages</param>
+    /// <returns>Messages with default system prompt if none provided</returns>
     private List<ChatMessage> PrepareMessages(List<ChatMessage> messages)
     {
         var allMessages = new List<ChatMessage>(messages);

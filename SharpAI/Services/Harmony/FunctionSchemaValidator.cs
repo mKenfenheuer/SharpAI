@@ -4,12 +4,13 @@ using System.Text.Json;
 namespace SharpAI.Services.Harmony;
 
 /// <summary>
-/// Provides validation for function definitions according to OpenAI specification
+/// Provides validation for function definitions according to OpenAI specification.
+/// Validates function schemas, parameters, and ensures compliance with OpenAI's JSON schema requirements.
 /// </summary>
 public static class FunctionSchemaValidator
 {
     /// <summary>
-    /// Validates a function definition according to OpenAI specification
+    /// Validates a function definition according to OpenAI specification.
     /// </summary>
     /// <param name="functionDef">The function definition to validate</param>
     /// <returns>A list of validation errors, empty if valid</returns>
@@ -31,8 +32,12 @@ public static class FunctionSchemaValidator
     }
 
     /// <summary>
-    /// Validates function parameters according to OpenAI JSON schema requirements
+    /// Validates function parameters according to OpenAI JSON schema requirements.
+    /// Enforces strict mode rules when applicable.
     /// </summary>
+    /// <param name="parameters">Function parameters to validate</param>
+    /// <param name="isStrict">Whether strict mode validation is enabled</param>
+    /// <param name="errors">List to collect validation errors</param>
     private static void ValidateParameters(FunctionParameters parameters, bool isStrict, List<string> errors)
     {
         if (parameters.Type != "object")
@@ -76,8 +81,12 @@ public static class FunctionSchemaValidator
     }
 
     /// <summary>
-    /// Validates a property schema recursively
+    /// Validates a property schema recursively, checking types and nested structures.
     /// </summary>
+    /// <param name="propertyName">Name of the property being validated</param>
+    /// <param name="schema">Property schema to validate</param>
+    /// <param name="isStrict">Whether strict mode validation is enabled</param>
+    /// <param name="errors">List to collect validation errors</param>
     private static void ValidatePropertySchema(string propertyName, PropertySchema schema, bool isStrict, List<string> errors)
     {
         if (schema.Type == null)
@@ -122,8 +131,11 @@ public static class FunctionSchemaValidator
     }
 
     /// <summary>
-    /// Validates basic JSON schema types
+    /// Validates basic JSON schema types against allowed values.
     /// </summary>
+    /// <param name="propertyName">Name of the property being validated</param>
+    /// <param name="type">Type string to validate</param>
+    /// <param name="errors">List to collect validation errors</param>
     private static void ValidateBasicType(string propertyName, string type, List<string> errors)
     {
         var validTypes = new HashSet<string>
@@ -138,8 +150,10 @@ public static class FunctionSchemaValidator
     }
 
     /// <summary>
-    /// Validates a list of tool definitions
+    /// Validates a list of tool definitions and returns any validation errors.
     /// </summary>
+    /// <param name="tools">List of tool definitions to validate</param>
+    /// <returns>Dictionary mapping tool names to their validation errors</returns>
     public static Dictionary<string, List<string>> ValidateToolDefinitions(List<ToolDefinition> tools)
     {
         var validationResults = new Dictionary<string, List<string>>();

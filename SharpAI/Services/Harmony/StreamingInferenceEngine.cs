@@ -7,6 +7,11 @@ using System.Text;
 
 namespace SharpAI.Services.Harmony;
 
+/// <summary>
+/// Handles streaming inference with browser tool integration using the Harmony format.
+/// Supports recursive tool calling where browser tools are executed internally and their
+/// results are fed back to the model for continued inference.
+/// </summary>
 public class StreamingInferenceEngine
 {
     private readonly ILogger<StreamingInferenceEngine> _logger;
@@ -26,6 +31,11 @@ public class StreamingInferenceEngine
         _browserHandler = browserHandler;
     }
 
+    /// <summary>
+    /// Generates a streaming response with browser tool integration.
+    /// If browser tools are called, they are executed internally and the results
+    /// are fed back to the model for continued inference.
+    /// </summary>
     public async IAsyncEnumerable<StreamingInferenceResult> GenerateStreamAsync(
         List<ChatMessage> messages,
         ChatCompletionRequest request,
@@ -33,6 +43,9 @@ public class StreamingInferenceEngine
         InferenceParams inferenceParams,
         [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
+        _logger.LogInformation("Starting streaming inference for model: {Model} with {MessageCount} messages", 
+            request.Model, messages.Count);
+
         // Check if tools are available and should be used
         var shouldUseFunctions = request.Tools?.Any() == true && 
                                  (request.ToolChoice != ToolChoice.None);
@@ -45,8 +58,6 @@ public class StreamingInferenceEngine
             request.Tools,
             request.ResponseFormat);
 
-        _logger.LogDebug("Formatted prompt: {Prompt}", formattedPrompt);
-
         // Initialize streaming state
         var streamState = new HarmonyStreamState();
         var responseBuilder = new StringBuilder();
@@ -56,7 +67,7 @@ public class StreamingInferenceEngine
         {
             if (cancellationToken.IsCancellationRequested)
             {
-                _logger.LogInformation("Streaming inference cancelled");
+                _logger.LogInformation("Streaming inference cancelled by user");
                 break;
             }
 
@@ -79,20 +90,20 @@ public class StreamingInferenceEngine
             // Check if we hit a completion stop token
             if (currentResponse.Contains("<|call|>") || currentResponse.Contains("<|return|>"))
             {
-                _logger.LogDebug("Hit completion stop token, ending inference");
                 break;
             }
         }
 
         // Parse final complete response
         var completeResponse = responseBuilder.ToString().Trim();
-        _logger.LogDebug("Complete raw response: {Response}", completeResponse);
-
         var parsedResponse = _parser.ParseCompleteResponse(completeResponse);
 
         // Handle browser tool calls internally
         if (parsedResponse.ToolCalls.Any(tc => BrowserToolHandler.IsBrowserToolCall(tc.Recipient)))
         {
+            var browserToolCount = parsedResponse.ToolCalls.Count(tc => BrowserToolHandler.IsBrowserToolCall(tc.Recipient));
+            _logger.LogInformation("Executing {ToolCount} browser tool call(s)", browserToolCount);
+            
             var toolResultMessages = await HandleBrowserToolCallsAsync(parsedResponse);
             
             // If we have tool results, continue inference with them
@@ -138,8 +149,7 @@ public class StreamingInferenceEngine
                 continuedMessages.Add(assistantToolCallMessage);
                 continuedMessages.AddRange(toolResultMessages);
 
-                _logger.LogDebug("Continuing inference recursively with {TotalMessageCount} messages (original: {OriginalCount}, assistant: 1, tool results: {ToolResultCount})", 
-                    continuedMessages.Count, messages.Count, toolResultMessages.Count);
+                _logger.LogInformation("Continuing inference with tool results: {ResultCount} tool result(s)", toolResultMessages.Count);
 
                 // Continue inference with tool results using recursive call
                 await foreach (var continuedResult in GenerateStreamAsync(
@@ -168,6 +178,9 @@ public class StreamingInferenceEngine
         };
     }
 
+    /// <summary>
+    /// Processes response format validation for JSON responses.
+    /// </summary>
     private string ProcessResponseFormat(string content, ResponseFormat responseFormat)
     {
         if (responseFormat.Type == ResponseFormatType.JsonObject)
@@ -204,6 +217,10 @@ public class StreamingInferenceEngine
         return content;
     }
 
+    /// <summary>
+    /// Executes browser tool calls and returns the results as ChatMessage objects.
+    /// Browser tool calls are handled internally and their results are prepared for continued inference.
+    /// </summary>
     private async Task<List<ChatMessage>> HandleBrowserToolCallsAsync(ParsedResponse parsedResponse)
     {
         var browserToolCalls = parsedResponse.ToolCalls
@@ -236,7 +253,7 @@ public class StreamingInferenceEngine
 
                 toolResultMessages.Add(toolResultMessage);
 
-                _logger.LogInformation("Browser tool call executed: {Function}", functionName);
+                _logger.LogDebug("Browser tool executed successfully: {Function}", functionName);
             }
             catch (Exception ex)
             {
@@ -279,6 +296,10 @@ public class StreamingInferenceEngine
     }
 }
 
+/// <summary>
+/// Represents a single result from the streaming inference process.
+/// Contains either incremental delta updates or the final parsed response.
+/// </summary>
 public class StreamingInferenceResult
 {
     public HarmonyStreamDelta? Delta { get; set; }

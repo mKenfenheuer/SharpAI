@@ -3,18 +3,37 @@ using SharpAI.Models;
 
 namespace SharpAI.Services.Harmony;
 
+/// <summary>
+/// Formats chat messages and tool definitions into the Harmony prompt format.
+/// Handles message conversion, tool definitions, response format specifications, and reasoning effort levels.
+/// </summary>
 public class HarmonyFormatter
 {
     private readonly ILogger<HarmonyFormatter> _logger;
 
+    /// <summary>
+    /// Initializes a new instance of the HarmonyFormatter.
+    /// </summary>
+    /// <param name="logger">Logger for formatter operations</param>
     public HarmonyFormatter(ILogger<HarmonyFormatter> logger)
     {
         _logger = logger;
     }
 
+    /// <summary>
+    /// Formats chat messages and configuration into a Harmony-compatible prompt.
+    /// </summary>
+    /// <param name="messages">List of chat messages to format</param>
+    /// <param name="hasFunctions">Whether function calling is enabled</param>
+    /// <param name="reasoningEffort">Level of reasoning effort to apply</param>
+    /// <param name="tools">Optional list of tool definitions</param>
+    /// <param name="responseFormat">Optional response format specification</param>
+    /// <returns>Formatted prompt string</returns>
     public string FormatPrompt(List<ChatMessage> messages, bool hasFunctions, ReasoningEffortLevel reasoningEffort, List<ToolDefinition>? tools = null, ResponseFormat? responseFormat = null)
     {
         var prompt = new StringBuilder();
+        _logger.LogDebug("Formatting prompt with {MessageCount} messages, functions: {HasFunctions}, reasoning: {ReasoningEffort}", 
+            messages.Count, hasFunctions, reasoningEffort);
 
         // System message with harmony format
         prompt.AppendLine($"<|start|>system<|message|>You are ChatGPT, a large language model trained by OpenAI.");
@@ -105,6 +124,7 @@ public class HarmonyFormatter
         
         if (hasFunctions)
         {
+            _logger.LogDebug("Adding function call instructions to prompt");
             prompt.AppendLine("- Function calls must go to the commentary channel with format:");
             prompt.AppendLine("  <|channel|>commentary to=functions.function_name<|message|>{\"param\":\"value\"}");
         }
@@ -124,6 +144,7 @@ public class HarmonyFormatter
         // Add tools definition if functions are available
         if (hasFunctions && tools?.Any() == true)
         {
+            _logger.LogDebug("Adding {ToolCount} tool definitions to prompt", tools.Count);
             prompt.AppendLine();
             prompt.AppendLine(CreateToolsDefinition(tools));
         }
@@ -131,6 +152,7 @@ public class HarmonyFormatter
         // Add response format definition if specified
         if (responseFormat != null)
         {
+            _logger.LogDebug("Adding response format definition: {FormatType}", responseFormat.Type);
             prompt.AppendLine();
             prompt.AppendLine(CreateResponseFormatDefinition(responseFormat));
         }
@@ -139,6 +161,7 @@ public class HarmonyFormatter
 
         // Add conversation messages (excluding system messages as they're in developer section)
         var conversationMessages = messages.Where(m => m.Role != ChatRole.System).ToList();
+        _logger.LogDebug("Processing {ConversationMessageCount} conversation messages", conversationMessages.Count);
         
         for (int i = 0; i < conversationMessages.Count; i++)
         {
@@ -168,9 +191,15 @@ public class HarmonyFormatter
         // Start assistant response
         prompt.Append("<|start|>assistant");
 
+        _logger.LogInformation("Completed prompt formatting with {TotalLength} characters", prompt.Length);
         return prompt.ToString();
     }
 
+    /// <summary>
+    /// Creates TypeScript-style tool definitions for function calling.
+    /// </summary>
+    /// <param name="tools">List of tool definitions to format</param>
+    /// <returns>Formatted tools definition string</returns>
     private string CreateToolsDefinition(List<ToolDefinition> tools)
     {
         var toolsBuilder = new StringBuilder();
@@ -211,6 +240,11 @@ public class HarmonyFormatter
         return toolsBuilder.ToString();
     }
 
+    /// <summary>
+    /// Converts function parameters from JSON schema format to TypeScript-like syntax.
+    /// </summary>
+    /// <param name="parameters">Function parameters to convert</param>
+    /// <returns>TypeScript-style parameter definition</returns>
     private string ConvertParametersToTypeScript(FunctionParameters? parameters)
     {
         if (parameters == null) return "";
@@ -280,6 +314,11 @@ public class HarmonyFormatter
         return "";
     }
 
+    /// <summary>
+    /// Converts a property schema to TypeScript type syntax.
+    /// </summary>
+    /// <param name="schema">Property schema to convert</param>
+    /// <returns>TypeScript type definition</returns>
     private string ConvertTypeToTypeScript(PropertySchema schema)
     {
         if (schema.Enum != null && schema.Enum.Count > 0)
@@ -329,6 +368,11 @@ public class HarmonyFormatter
         return "any";
     }
 
+    /// <summary>
+    /// Converts nested object schemas to TypeScript interface syntax.
+    /// </summary>
+    /// <param name="schema">Property schema containing nested object definition</param>
+    /// <returns>TypeScript interface definition</returns>
     private string ConvertNestedObjectToTypeScript(PropertySchema schema)
     {
         if (schema.Properties == null || !schema.Properties.Any())
@@ -368,6 +412,11 @@ public class HarmonyFormatter
         return nestedBuilder.ToString();
     }
 
+    /// <summary>
+    /// Creates response format definition for structured output requirements.
+    /// </summary>
+    /// <param name="responseFormat">Response format specification</param>
+    /// <returns>Formatted response format definition</returns>
     private string CreateResponseFormatDefinition(ResponseFormat responseFormat)
     {
         var formatBuilder = new StringBuilder();
@@ -401,6 +450,11 @@ public class HarmonyFormatter
         return formatBuilder.ToString();
     }
 
+    /// <summary>
+    /// Converts schema objects to JSON string representation.
+    /// </summary>
+    /// <param name="schema">Schema object to convert</param>
+    /// <returns>JSON string representation of the schema</returns>
     private string ConvertSchemaToJson(object? schema)
     {
         if (schema == null)
@@ -435,6 +489,11 @@ public class HarmonyFormatter
         }
     }
 
+    /// <summary>
+    /// Converts function parameters to JSON schema format.
+    /// </summary>
+    /// <param name="parameters">Function parameters to convert</param>
+    /// <returns>JSON schema string</returns>
     private string ConvertFunctionParametersToJsonSchema(FunctionParameters parameters)
     {
         var schema = new Dictionary<string, object>
@@ -470,6 +529,11 @@ public class HarmonyFormatter
         });
     }
 
+    /// <summary>
+    /// Converts a property schema to JSON representation.
+    /// </summary>
+    /// <param name="propertySchema">Property schema to convert</param>
+    /// <returns>JSON object representation of the property schema</returns>
     private object ConvertPropertySchemaToJson(PropertySchema propertySchema)
     {
         var property = new Dictionary<string, object>();
@@ -552,6 +616,11 @@ public class HarmonyFormatter
         return property;
     }
 
+    /// <summary>
+    /// Extracts the tool name from a chat message for proper formatting.
+    /// </summary>
+    /// <param name="message">Chat message containing tool information</param>
+    /// <returns>Tool name for formatting</returns>
     private string GetToolName(ChatMessage message)
     {
         // Extract tool name from message context
