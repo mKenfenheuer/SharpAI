@@ -220,7 +220,12 @@ public class HarmonyFormatter : IDisposable
     /// </summary>
     private HarmonyDeveloperContent CreateDeveloperContent(List<ToolDefinition>? tools, ChatMessage systemMessage, ResponseFormat? responseFormat)
     {
-        var developerContent = HarmonyDeveloperContent.New().WithInstructions(systemMessage.Content?.ToString() ?? "");
+        var developerContent = HarmonyDeveloperContent.New();
+
+        if (!string.IsNullOrEmpty(systemMessage.Content?.ToString()))
+        {
+            developerContent = developerContent.WithInstructions(systemMessage.Content?.ToString() ?? "");
+        }
 
         // Add tools if provided
         if (tools?.Any() == true)
@@ -238,6 +243,14 @@ public class HarmonyFormatter : IDisposable
         // Add response format constraint if specified
         if (responseFormat != null)
         {
+            developerContent = developerContent.WithResponseFormat(new HarmonyResponseFormat()
+            {
+                Name = responseFormat.JsonSchema?.Name ?? "Response Format",
+                Schema = JsonSerializer.Serialize(responseFormat.JsonSchema?.Schema ?? new
+                {
+                }),
+                Description = responseFormat.JsonSchema?.Description
+            });
         }
 
         return developerContent;

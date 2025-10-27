@@ -633,6 +633,7 @@ public class HarmonyDeveloperContent : HarmonyMessageContent
 {
     public string? Instructions { get; set; }
     public Dictionary<string, HarmonyToolNamespaceConfig>? Tools { get; set; }
+    public List<HarmonyResponseFormat> ResponseFormats { get; set; } = new List<HarmonyResponseFormat>();
 
     public static HarmonyDeveloperContent New() => new();
 
@@ -654,6 +655,12 @@ public class HarmonyDeveloperContent : HarmonyMessageContent
         return WithTools(new HarmonyToolNamespaceConfig("functions", null, tools));
     }
 
+    public HarmonyDeveloperContent WithResponseFormat(HarmonyResponseFormat responseFormat)
+    {
+        ResponseFormats.Add(responseFormat);
+        return this;
+    }
+
     internal override void RenderInto(StringBuilder into, HarmonyMessageRenderConfig? options)
     {
         var sections = new List<string>();
@@ -669,8 +676,29 @@ public class HarmonyDeveloperContent : HarmonyMessageContent
             sections.Add(Tools.Render(options));
         }
 
+        if (ResponseFormats.Count > 0)
+        {
+            sections.Add("# Response Formats");
+            foreach (var responseFormat in ResponseFormats)
+            {
+                sections.Add($"## {responseFormat.Name}");
+                if (!string.IsNullOrEmpty(responseFormat.Description))
+                {
+                    sections.Add($"// {responseFormat.Description}");
+                }
+                sections.Add($"{responseFormat.Schema}");
+            }
+        }
+
         into.Append(string.Join("\n\n", sections));
     }
+}
+
+public class HarmonyResponseFormat
+{
+    public string Name { get; set; }
+    public string Description { get; set; }
+    public string Schema { get; set; }
 }
 
 

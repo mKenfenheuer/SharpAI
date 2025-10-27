@@ -128,9 +128,10 @@ public static class LLamaUtilities
             repeatPenalty = (float)(1.0 + Math.Abs(request.PresencePenalty.Value));
         }
 
+        
         // Check if we need JSON grammar for structured output
         LLama.Sampling.Grammar? jsonGrammar = null;
-        if (request.ResponseFormat?.Type == ResponseFormatType.JsonObject || 
+        /*if (request.ResponseFormat?.Type == ResponseFormatType.JsonObject || 
             request.ResponseFormat?.Type == ResponseFormatType.JsonSchema)
         {
             try
@@ -145,7 +146,7 @@ public static class LLamaUtilities
             {
                 // Failed to load JSON grammar; continue without grammar
             }
-        }
+        }*/
 
         var samplingPipeline = new DefaultSamplingPipeline()
         {
@@ -210,10 +211,10 @@ array  ::=
   )? ""]"" ws
 
 string ::=
-  '""' (
+  ""\"""" (
     [^""\\\x7F\x00-\x1F] |
     ""\\"" ([""\\bfnrt] | ""u"" [0-9a-fA-F]{4}) # escapes
-  )* '""' ws
+  )* ""\"""" ws
 
 number ::= (""-""? ([0-9] | [1-9] [0-9]{0,15})) (""."" [0-9]+)? ([eE] [-+]? [0-9] [1-9]{0,15})? ws
 
