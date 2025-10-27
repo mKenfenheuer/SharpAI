@@ -118,6 +118,21 @@ public static class LLamaUtilities
             }
         }
 
+
+
+        var inferenceParams = new InferenceParams
+        {
+            MaxTokens = request.MaxTokens ?? int.MaxValue,
+            AntiPrompts = new List<string>(antiPrompts),
+            SamplingPipeline = BuildSamplingPipeline(request),
+            DecodeSpecialTokens = true
+        };
+
+        return inferenceParams;
+    }
+    
+    public static DefaultSamplingPipeline BuildSamplingPipeline(ChatCompletionRequest request, Grammar? grammar = null)
+    {
         var repeatPenalty = 1.1f;
         if (request.FrequencyPenalty.HasValue)
         {
@@ -128,44 +143,15 @@ public static class LLamaUtilities
             repeatPenalty = (float)(1.0 + Math.Abs(request.PresencePenalty.Value));
         }
 
-        
-        // Check if we need JSON grammar for structured output
-        LLama.Sampling.Grammar? jsonGrammar = null;
-        /*if (request.ResponseFormat?.Type == ResponseFormatType.JsonObject || 
-            request.ResponseFormat?.Type == ResponseFormatType.JsonSchema)
-        {
-            try
-            {
-                var grammarText = GetJsonGrammar();
-                if (!string.IsNullOrEmpty(grammarText))
-                {
-                    jsonGrammar = new LLama.Sampling.Grammar(grammarText, "root");
-                }
-            }
-            catch (Exception)
-            {
-                // Failed to load JSON grammar; continue without grammar
-            }
-        }*/
-
         var samplingPipeline = new DefaultSamplingPipeline()
         {
             Temperature = (float)(request.Temperature ?? 0.7),
             TopP = (float)(request.TopP ?? 1.0),
             RepeatPenalty = repeatPenalty,
             PreventEOS = false,
-            Grammar = jsonGrammar
+            Grammar = grammar,
         };
-
-        var inferenceParams = new InferenceParams
-        {
-            MaxTokens = request.MaxTokens ?? int.MaxValue,
-            AntiPrompts = new List<string>(antiPrompts),
-            SamplingPipeline = samplingPipeline,
-            DecodeSpecialTokens = true
-        };
-
-        return inferenceParams;
+        return samplingPipeline;
     }
 
     /// <summary>
@@ -184,42 +170,5 @@ public static class LLamaUtilities
     public static long GetCurrentUnixTimestamp()
     {
         return DateTimeOffset.UtcNow.ToUnixTimeSeconds();
-    }
-
-    /// <summary>
-    /// Provides JSON grammar definition for structured output parsing.
-    /// </summary>
-    /// <returns>JSON grammar string for LLamaSharp</returns>
-    private static string GetJsonGrammar()
-    {
-        // Inline JSON grammar for structured output
-        // This is based on the standard JSON grammar from LLamaSharp examples
-        return @"
-root   ::= object
-value  ::= object | array | string | number | (""true"" | ""false"" | ""null"") ws
-
-object ::=
-  ""{"" ws (
-            string "":"" ws value
-    ("","" ws string "":"" ws value)*
-  )? ""}"" ws
-
-array  ::=
-  ""["" ws (
-            value
-    ("","" ws value)*
-  )? ""]"" ws
-
-string ::=
-  ""\"""" (
-    [^""\\\x7F\x00-\x1F] |
-    ""\\"" ([""\\bfnrt] | ""u"" [0-9a-fA-F]{4}) # escapes
-  )* ""\"""" ws
-
-number ::= (""-""? ([0-9] | [1-9] [0-9]{0,15})) (""."" [0-9]+)? ([eE] [-+]? [0-9] [1-9]{0,15})? ws
-
-# Optional space: by convention, applied in this grammar after literal chars when allowed
-ws ::= | "" "" | ""\n"" [ \t]{0,20}
-".Trim();
     }
 }

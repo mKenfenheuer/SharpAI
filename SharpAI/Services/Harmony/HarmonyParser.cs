@@ -17,6 +17,15 @@ public class HarmonyParser : IDisposable
     private StringBuilder _rawContent = new StringBuilder();
     private HarmonyAssistantContent _currentAssistantContent = new HarmonyAssistantContent();
     public bool IsComplete { get; internal set; }
+    public bool IsInFinalContent { 
+        get
+        {
+            return _currentMessage != null &&
+                   _currentMessage.Role == HarmonyRole.Assistant &&
+                   (_parserState.CurrentChannel == HarmonyChannel.Final) &&
+                   _parserState.ParseState == HarmonyParseState.InMessageContent;
+        }
+    }
 
     /// <summary>
     /// Initializes a new instance of the HarmonyParser.

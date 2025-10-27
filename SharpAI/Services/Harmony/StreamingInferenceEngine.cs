@@ -72,7 +72,9 @@ public class StreamingInferenceEngine
 
         // Create a fresh stateless executor to avoid state contamination from previous inferences
         var executor = new StatelessExecutor(modelInstance.Weights!, modelInstance.Context!.Params);
-        
+
+        var continueWithGrammar = false;
+
         await foreach (var token in executor.InferAsync(formattedPrompt, inferenceParams))
         {
             if (cancellationToken.IsCancellationRequested)
@@ -83,6 +85,15 @@ public class StreamingInferenceEngine
 
             rawResponseBuilder.Append(token);
             var message = _parser.ParseToken(token);
+
+            if (request.ResponseFormat != null && _parser.IsInFinalContent)
+            {
+                // We need to break here to apply response format validation using the grammar.
+                //TODO: Implement.
+                continueWithGrammar = true;
+                break;
+            }
+
             if (message != null)
             {
                 if (!_parser.IsComplete)
@@ -100,7 +111,52 @@ public class StreamingInferenceEngine
                     break;
                 }
             }
+        }
 
+        if (continueWithGrammar)
+        {
+            _logger.LogInformation("Continuing inference with grammar-based response format validation");
+
+
+            inferenceParams.SamplingPipeline = LLamaUtilities.BuildSamplingPipeline(
+                request,
+                BuildResponseFormatGrammar(request.ResponseFormat!));
+
+
+            // Create a fresh stateless executor to avoid state contamination from previous inferences
+            executor = new StatelessExecutor(modelInstance.Weights!, modelInstance.Context!.Params);
+
+            var prompt = formattedPrompt + rawResponseBuilder.ToString();   
+
+            await foreach (var token in executor.InferAsync(prompt, inferenceParams))
+            {
+                if (cancellationToken.IsCancellationRequested)
+                {
+                    _logger.LogInformation("Streaming inference cancelled by user");
+                    break;
+                }
+
+                rawResponseBuilder.Append(token);
+                var message = _parser.ParseToken(token);
+
+                if (message != null)
+                {
+                    if (!_parser.IsComplete)
+                    {
+                        yield return new StreamingInferenceResult
+                        {
+                            Delta = message,
+                            IsComplete = false,
+                            RawResponse = string.Empty // Raw response tracking would need to be implemented
+                        };
+                    }
+                    else
+                    {
+                        // Completed message
+                        break;
+                    }
+                }
+            }
         }
 
         var completeMessages = _parser.GetResponse();
@@ -110,7 +166,7 @@ public class StreamingInferenceEngine
         if (completeMessages.ToolCall != null)
         {
             ChatMessage? toolResultMessage = null;
-            
+
             if (BrowserToolHandler.IsBrowserToolCall(completeMessages.ToolCall.Recipient))
             {
                 _logger.LogInformation("Executing browser tool call");
@@ -174,6 +230,31 @@ public class StreamingInferenceEngine
             IsComplete = true,
             RawResponse = string.Empty // Raw response tracking would need to be implemented
         };
+    }
+
+    private LLama.Sampling.Grammar? BuildResponseFormatGrammar(ResponseFormat responseFormat)
+    {
+        // Check if we need JSON grammar for structured output
+        // Use schema-based grammar generation when available
+        LLama.Sampling.Grammar? jsonGrammar = null;
+        if (responseFormat.Type == ResponseFormatType.JsonObject ||
+            responseFormat.Type == ResponseFormatType.JsonSchema)
+        {
+            try
+            {
+                var grammarText = ConditionalGrammarBuilder.BuildConditionalGrammar(responseFormat);
+                if (!string.IsNullOrEmpty(grammarText))
+                {
+                    jsonGrammar = new LLama.Sampling.Grammar(grammarText, "root");
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error building response format grammar");
+                // Proceed without grammar if there's an error
+            }
+        }
+        return jsonGrammar;
     }
 
     /// <summary>
