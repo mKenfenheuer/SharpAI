@@ -317,11 +317,110 @@ public class HarmonyToolNamespaceConfig
 
     public static HarmonyToolNamespaceConfig Browser()
     {
-        // Simplified browser tool config - in a full implementation this would match the Rust version
-        return new HarmonyToolNamespaceConfig("browser", "Web browsing tools", new[]
+        // Browser tool configuration matching the detailed specification
+        return new HarmonyToolNamespaceConfig("browser", @"Tool for browsing.
+The `cursor` appears in brackets before each browsing display: `[{cursor}]`.
+Cite information from the tool using the following format:
+`【{cursor}†L{line_start}(-L{line_end})?】`, for example: `【6†L9-L11】` or `【8†L3】`.
+Do not quote more than 10 words directly from the tool output.
+sources=web (default: web)", new[]
         {
-            HarmonyToolDescription.New("search", "Search the web", null),
-            HarmonyToolDescription.New("navigate", "Navigate to a URL", null)
+            HarmonyToolDescription.New("search", "Searches for information related to `query` and displays `topn` results.", new Dictionary<string, object>
+            {
+                ["type"] = "object",
+                ["properties"] = new Dictionary<string, object>
+                {
+                    ["query"] = new Dictionary<string, object>
+                    {
+                        ["type"] = "string",
+                        ["description"] = "Search query string"
+                    },
+                    ["topn"] = new Dictionary<string, object>
+                    {
+                        ["type"] = "number",
+                        ["description"] = "Number of results to display",
+                        ["default"] = 10
+                    },
+                    ["source"] = new Dictionary<string, object>
+                    {
+                        ["type"] = "string",
+                        ["description"] = "Source to search",
+                        ["default"] = "web"
+                    }
+                },
+                ["required"] = new[] { "query" }
+            }),
+            HarmonyToolDescription.New("open", @"Opens the link `id` from the page indicated by `cursor` starting at line number `loc`, showing `num_lines` lines.
+Valid link ids are displayed with the formatting: `【{id}†.*】`.
+If `cursor` is not provided, the most recent page is implied.
+If `id` is a string, it is treated as a fully qualified URL associated with `source`.
+If `loc` is not provided, the viewport will be positioned at the beginning of the document or centered on the most relevant passage, if available.
+Use this function without `id` to scroll to a new location of an opened page.", new Dictionary<string, object>
+            {
+                ["type"] = "object",
+                ["properties"] = new Dictionary<string, object>
+                {
+                    ["id"] = new Dictionary<string, object>
+                    {
+                        ["oneOf"] = new object[]
+                        {
+                            new Dictionary<string, object> { ["type"] = "number" },
+                            new Dictionary<string, object> { ["type"] = "string" }
+                        },
+                        ["description"] = "Link ID or URL to open",
+                        ["default"] = -1
+                    },
+                    ["cursor"] = new Dictionary<string, object>
+                    {
+                        ["type"] = "number",
+                        ["description"] = "Page cursor identifier",
+                        ["default"] = -1
+                    },
+                    ["loc"] = new Dictionary<string, object>
+                    {
+                        ["type"] = "number",
+                        ["description"] = "Line number to start viewing from",
+                        ["default"] = -1
+                    },
+                    ["num_lines"] = new Dictionary<string, object>
+                    {
+                        ["type"] = "number",
+                        ["description"] = "Number of lines to display",
+                        ["default"] = -1
+                    },
+                    ["view_source"] = new Dictionary<string, object>
+                    {
+                        ["type"] = "boolean",
+                        ["description"] = "Whether to view source code",
+                        ["default"] = false
+                    },
+                    ["source"] = new Dictionary<string, object>
+                    {
+                        ["type"] = "string",
+                        ["description"] = "Source identifier"
+                    }
+                },
+                ["required"] = new string[] { }
+            }),
+            HarmonyToolDescription.New("find", "Finds exact matches of `pattern` in the current page, or the page given by `cursor`.", new Dictionary<string, object>
+            {
+                ["type"] = "object",
+                ["properties"] = new Dictionary<string, object>
+                {
+                    ["pattern"] = new Dictionary<string, object>
+                    {
+                        ["type"] = "string",
+                        ["description"] = "Pattern to search for"
+                    },
+                    ["cursor"] = new Dictionary<string, object>
+                    {
+                        ["type"] = "number",
+                        ["description"] = "Page cursor identifier",
+                        ["default"] = -1
+                    }
+                },
+                ["required"] = new[] { "pattern" }
+            })
         });
     }
 

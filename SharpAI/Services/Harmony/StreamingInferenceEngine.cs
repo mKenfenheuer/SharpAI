@@ -106,51 +106,58 @@ public class StreamingInferenceEngine
         var completeMessages = _parser.GetResponse();
         var rawResponse = rawResponseBuilder.ToString();
 
-        // Handle browser tool calls internally
-        if (completeMessages.ToolCall != null && BrowserToolHandler.IsBrowserToolCall(completeMessages.ToolCall.Recipient))
+        // Handle tool calls internally
+        if (completeMessages.ToolCall != null)
         {
-            _logger.LogInformation("Executing browser tool call");
-
-            var toolResultMessage = await HandleBrowserToolCallAsync(completeMessages);
-
-            var assistantToolCallMessage = new ChatMessage
+            ChatMessage? toolResultMessage = null;
+            
+            if (BrowserToolHandler.IsBrowserToolCall(completeMessages.ToolCall.Recipient))
             {
-                Role = ChatRole.Assistant,
-                Content = null,
-                ToolCalls = new List<ToolCall>
-                {
-                    new ToolCall
-                    {
-                        Type = ToolType.Function,
-                        Function = new FunctionCall
-                        {
-                            Name = completeMessages.ToolCall.Recipient,
-                            Namespace = completeMessages.ToolCall.Namespace,
-                            Arguments = completeMessages.ToolCall.Arguments ?? "{}"
-                        }
-                    }
-                }
-            };
-
-            // Build new message list with original messages + assistant tool call + tool results
-            var continuedMessages = new List<ChatMessage>(messages);
-            continuedMessages.Add(assistantToolCallMessage);
-            continuedMessages.Add(toolResultMessage);
-
-            _logger.LogInformation("Continuing inference with tool results");
-
-            // We need to reset the parser state for continued inference
-            _parser.ResetParserState();
-
-            // Continue inference with tool results using recursive call
-            await foreach (var continuedResult in GenerateStreamAsync(
-                continuedMessages, request, modelInstance, inferenceParams, cancellationToken))
-            {
-                yield return continuedResult;
+                _logger.LogInformation("Executing browser tool call");
+                toolResultMessage = await HandleBrowserToolCallAsync(completeMessages);
             }
 
-            // Return early as the continued inference handles the final result
-            yield break;
+            if (toolResultMessage != null)
+            {
+                var assistantToolCallMessage = new ChatMessage
+                {
+                    Role = ChatRole.Assistant,
+                    Content = null,
+                    ToolCalls = new List<ToolCall>
+                    {
+                        new ToolCall
+                        {
+                            Type = ToolType.Function,
+                            Function = new FunctionCall
+                            {
+                                Name = completeMessages.ToolCall.Recipient,
+                                Namespace = completeMessages.ToolCall.Namespace,
+                                Arguments = completeMessages.ToolCall.Arguments ?? "{}"
+                            }
+                        }
+                    }
+                };
+
+                // Build new message list with original messages + assistant tool call + tool results
+                var continuedMessages = new List<ChatMessage>(messages);
+                continuedMessages.Add(assistantToolCallMessage);
+                continuedMessages.Add(toolResultMessage);
+
+                _logger.LogInformation("Continuing inference with tool results");
+
+                // We need to reset the parser state for continued inference
+                _parser.ResetParserState();
+
+                // Continue inference with tool results using recursive call
+                await foreach (var continuedResult in GenerateStreamAsync(
+                    continuedMessages, request, modelInstance, inferenceParams, cancellationToken))
+                {
+                    yield return continuedResult;
+                }
+
+                // Return early as the continued inference handles the final result
+                yield break;
+            }
         }
 
         // Apply response format validation if needed
