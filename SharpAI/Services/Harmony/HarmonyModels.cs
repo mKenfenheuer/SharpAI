@@ -3,7 +3,11 @@ using SharpAI.Models;
 
 namespace SharpAI.Services.Harmony;
 
-
+/// <summary>
+/// Contains data models and enums for the Harmony message format system.
+/// Harmony is a structured format for AI conversations that supports multi-channel communication,
+/// tool calls, and advanced conversation flow control.
+/// </summary>
 
 /// <summary>
 /// Formatting tokens used by the Harmony renderer.
@@ -45,10 +49,23 @@ public static class HarmonyFormattingTokenExtensions
     };
 }
 
+/// <summary>
+/// Represents different communication channels in the Harmony format.
+/// Allows the AI to express different types of content (final response, analysis, commentary).
+/// </summary>
 public enum HarmonyChannel
 {
+    /// <summary>
+    /// The final response channel containing the main response to the user.
+    /// </summary>
     Final,
+    /// <summary>
+    /// The analysis channel containing detailed analysis of the request or situation.
+    /// </summary>
     Analysis,
+    /// <summary>
+    /// The commentary channel containing meta-commentary about the response process.
+    /// </summary>
     Commentary,
 }
 
@@ -71,12 +88,31 @@ public static class HarmonyChannelExtensions
     };
 }
 
+/// <summary>
+/// Represents the role of a participant in a Harmony conversation.
+/// Similar to standard chat roles but with additional developer role.
+/// </summary>
 public enum HarmonyRole
 {
+    /// <summary>
+    /// System role for setting initial instructions and behavior.
+    /// </summary>
     System,
+    /// <summary>
+    /// Developer role for development-specific instructions and context.
+    /// </summary>
     Developer,
+    /// <summary>
+    /// User role for end-user messages and requests.
+    /// </summary>
     User,
+    /// <summary>
+    /// Assistant role for AI responses and interactions.
+    /// </summary>
     Assistant,
+    /// <summary>
+    /// Tool role for tool execution results and responses.
+    /// </summary>
     Tool,
 }
 
@@ -103,10 +139,22 @@ public static class HarmonyRoleExtensions
     };
 }
 
+/// <summary>
+/// Represents assistant content in a Harmony message, including channel specification and optional tool calls.
+/// </summary>
 public class HarmonyAssistantContent : HarmonyMessageContent
 {
+    /// <summary>
+    /// The communication channel for this content (final, analysis, commentary).
+    /// </summary>
     public HarmonyChannel Channel { get; set; }
+    /// <summary>
+    /// The text content of the message (null if this is a tool call).
+    /// </summary>
     public string? Content { get; set; }
+    /// <summary>
+    /// Tool call information if this content represents a tool invocation.
+    /// </summary>
     public HarmonyToolCall? ToolCall { get; set; }
 
     internal override void RenderInto(StringBuilder into, HarmonyMessageRenderConfig? options)
@@ -130,10 +178,22 @@ public class HarmonyAssistantContent : HarmonyMessageContent
     }
 }
 
+/// <summary>
+/// Represents a complete message in the Harmony format with role, content, and completion status.
+/// </summary>
 public class HarmonyMessage
 {
+    /// <summary>
+    /// The role of the message author.
+    /// </summary>
     public HarmonyRole Role { get; set; }
+    /// <summary>
+    /// List of content parts that make up this message.
+    /// </summary>
     public List<HarmonyMessageContent> Content { get; set; } = new List<HarmonyMessageContent>();
+    /// <summary>
+    /// Whether this message is complete or still being generated.
+    /// </summary>
     public bool IsComplete { get; set; }
 
     internal void RenderInto(StringBuilder into, HarmonyMessageRenderConfig? options)

@@ -5,6 +5,10 @@ using System.Text.Json;
 
 namespace SharpAI.Api.Chat
 {
+    /// <summary>
+    /// Provides OpenAI-compatible chat completion endpoints.
+    /// Handles both streaming and non-streaming chat completions with tool support.
+    /// </summary>
     [ApiController]
     [Route("v1/chat")]
     public class ChatController : ControllerBase
@@ -12,12 +16,23 @@ namespace SharpAI.Api.Chat
         private readonly LLamaSharpService _llamaService;
         private readonly ILogger<ChatController> _logger;
 
+        /// <summary>
+        /// Initializes a new instance of the ChatController.
+        /// </summary>
+        /// <param name="llamaService">LLamaSharp service for chat completions</param>
+        /// <param name="logger">Logger for controller operations</param>
         public ChatController(LLamaSharpService llamaService, ILogger<ChatController> logger)
         {
             _llamaService = llamaService;
             _logger = logger;
         }
 
+        /// <summary>
+        /// Creates a chat completion, either as a single response or a stream.
+        /// Compatible with OpenAI's chat completions API.
+        /// </summary>
+        /// <param name="request">The chat completion request</param>
+        /// <returns>A chat completion response</returns>
         [HttpPost("completions")]
         public async Task<IActionResult> CreateChatCompletion([FromBody] ChatCompletionRequest request)
         {
@@ -40,6 +55,11 @@ namespace SharpAI.Api.Chat
             }
         }
 
+        /// <summary>
+        /// Handles non-streaming chat completion requests.
+        /// </summary>
+        /// <param name="request">The chat completion request</param>
+        /// <returns>A complete chat completion response</returns>
         private async Task<IActionResult> HandleNonStreamingResponse(ChatCompletionRequest request)
         {
             var response = await _llamaService.GenerateChatCompletionAsync(request);

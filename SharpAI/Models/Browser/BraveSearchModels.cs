@@ -2,38 +2,75 @@ using System.Text.Json.Serialization;
 
 namespace SharpAI.Models.Browser;
 
+/// <summary>
+/// Represents the complete response structure from the Brave Search API.
+/// Contains query information, web results, news results, and mixed results.
+/// </summary>
 public class BraveSearchResponse
 {
+    /// <summary>
+    /// The type of search response (e.g., "search").
+    /// </summary>
     [JsonPropertyName("type")]
     public string Type { get; set; } = string.Empty;
 
+    /// <summary>
+    /// Information about the search query including alterations and metadata.
+    /// </summary>
     [JsonPropertyName("query")]
     public BraveQuery? Query { get; set; }
 
+    /// <summary>
+    /// Web search results from the Brave Search API.
+    /// </summary>
     [JsonPropertyName("web")]
     public BraveSearch? Web { get; set; }
 
+    /// <summary>
+    /// News search results from the Brave Search API.
+    /// </summary>
     [JsonPropertyName("news")]
     public BraveNews? News { get; set; }
 
+    /// <summary>
+    /// Mixed results combining different result types.
+    /// </summary>
     [JsonPropertyName("mixed")]
     public BraveMixedResponse? Mixed { get; set; }
 }
 
+/// <summary>
+/// Contains metadata and information about the search query processed by Brave Search.
+/// </summary>
 public class BraveQuery
 {
+    /// <summary>
+    /// The original query string as submitted by the user.
+    /// </summary>
     [JsonPropertyName("original")]
     public string Original { get; set; } = string.Empty;
 
+    /// <summary>
+    /// Whether to show a strict content warning for the query.
+    /// </summary>
     [JsonPropertyName("show_strict_warning")]
     public bool ShowStrictWarning { get; set; }
 
+    /// <summary>
+    /// The altered query string if Brave modified the original query for better results.
+    /// </summary>
     [JsonPropertyName("altered")]
     public string? Altered { get; set; }
 
+    /// <summary>
+    /// Whether safe search filtering was applied to the query.
+    /// </summary>
     [JsonPropertyName("safesearch")]
     public bool SafeSearch { get; set; }
 
+    /// <summary>
+    /// Whether the query appears to be navigational (user looking for a specific website).
+    /// </summary>
     [JsonPropertyName("is_navigational")]
     public bool IsNavigational { get; set; }
 
@@ -77,14 +114,26 @@ public class BraveQuery
     public string? RedditCluster { get; set; }
 }
 
+/// <summary>
+/// Contains web search results returned by the Brave Search API.
+/// </summary>
 public class BraveSearch
 {
+    /// <summary>
+    /// The type of search results (typically "search").
+    /// </summary>
     [JsonPropertyName("type")]
     public string Type { get; set; } = string.Empty;
 
+    /// <summary>
+    /// List of individual search results from the web search.
+    /// </summary>
     [JsonPropertyName("results")]
     public List<BraveSearchResult> Results { get; set; } = new();
 
+    /// <summary>
+    /// Whether the search results are considered family-friendly.
+    /// </summary>
     [JsonPropertyName("family_friendly")]
     public bool FamilyFriendly { get; set; }
 }

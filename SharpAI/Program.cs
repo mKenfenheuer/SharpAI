@@ -5,8 +5,16 @@ using Microsoft.AspNetCore.Http.Features;
 
 namespace SharpAI;
 
+/// <summary>
+/// The main entry point for the SharpAI application.
+/// Configures and starts the web host with all required services for OpenAI-compatible API endpoints.
+/// </summary>
 public class Program
 {
+    /// <summary>
+    /// The main entry point for the application. Configures services, middleware, and starts the web host.
+    /// </summary>
+    /// <param name="args">Command line arguments</param>
     public static void Main(string[] args)
     {
         var builder = WebApplication.CreateBuilder(args);

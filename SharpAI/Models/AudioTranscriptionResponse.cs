@@ -2,27 +2,52 @@ using System.Text.Json.Serialization;
 
 namespace SharpAI.Models
 {
+    /// <summary>
+    /// Represents the response from an audio transcription operation using Whisper models.
+    /// Compatible with OpenAI's audio transcription response format.
+    /// </summary>
     public class AudioTranscriptionResponse
     {
+        /// <summary>
+        /// The transcribed text from the audio file.
+        /// </summary>
         [JsonPropertyName("text")]
         public string? Text { get; set; }
 
+        /// <summary>
+        /// The type of task performed (typically "transcribe").
+        /// </summary>
         [JsonPropertyName("task")]
         public string? Task { get; set; }
 
+        /// <summary>
+        /// The detected or specified language of the audio (ISO-639-1 format).
+        /// </summary>
         [JsonPropertyName("language")]
         public string? Language { get; set; }
 
+        /// <summary>
+        /// The duration of the audio file in seconds.
+        /// </summary>
         [JsonPropertyName("duration")]
         public double? Duration { get; set; }
 
+        /// <summary>
+        /// Detailed transcription segments with timestamps (when verbose format is requested).
+        /// </summary>
         [JsonPropertyName("segments")]
         public List<TranscriptionSegment>? Segments { get; set; }
 
+        /// <summary>
+        /// Individual word-level timestamps (when word-level granularity is requested).
+        /// </summary>
         [JsonPropertyName("words")]
         public List<TranscriptionWord>? Words { get; set; }
     }
 
+    /// <summary>
+    /// Represents a segment of transcribed audio with timing and confidence information.
+    /// </summary>
     public class TranscriptionSegment
     {
         [JsonPropertyName("id")]
@@ -56,6 +81,9 @@ namespace SharpAI.Models
         public double NoSpeechProb { get; set; }
     }
 
+    /// <summary>
+    /// Represents a single word in the transcription with start and end timestamps.
+    /// </summary>
     public class TranscriptionWord
     {
         [JsonPropertyName("word")]
@@ -68,6 +96,9 @@ namespace SharpAI.Models
         public double End { get; set; }
     }
 
+    /// <summary>
+    /// Represents a chunk of streaming audio transcription data.
+    /// </summary>
     public class AudioTranscriptionChunk
     {
         [JsonPropertyName("text")]

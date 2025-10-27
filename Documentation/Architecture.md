@@ -1,6 +1,15 @@
 # Architecture Documentation
 
-SharpAI is built with a modular, layered architecture designed for scalability, maintainability, and high performance. This document outlines the system architecture, key components, and design patterns used throughout the application.
+SharpAI is built with a modular, layered architecture designed for scalability, maintainability, and high performance. The system provides OpenAI-compatible APIs while leveraging local AI models for inference. This document outlines the system architecture, key components, and design patterns used throughout the application.
+
+## Key Features
+
+- **OpenAI API Compatibility**: Drop-in replacement for OpenAI's chat completions and audio APIs
+- **Local Model Inference**: Uses LLamaSharp and Whisper.NET for on-premises AI inference
+- **Advanced Tool Calling**: Sophisticated tool integration with the Harmony format system
+- **Browser Integration**: Built-in web search and content retrieval capabilities
+- **Streaming Support**: Real-time streaming responses for chat completions
+- **High Performance**: Built on .NET 9 with optimized native libraries
 
 ## System Overview
 
