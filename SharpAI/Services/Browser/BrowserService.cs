@@ -33,35 +33,6 @@ public class BrowserService
     }
 
     /// <summary>
-    /// Performs a web search using Brave Search API and returns formatted results.
-    /// </summary>
-    /// <param name="args">Search parameters including query and result count</param>
-    /// <returns>Formatted search results or error message</returns>
-    public async Task<string> SearchAsync(BrowserSearchArgs args)
-    {
-        _logger.LogInformation("Performing web search for query: {Query}", args.Query);
-
-        try
-        {
-            if (string.IsNullOrEmpty(_braveOptions.ApiKey))
-            {
-                _logger.LogWarning("Brave Search API key not configured");
-                return "Error: Browser search is not available. The Brave Search API key is not configured. Please contact the administrator to set up the API key in the application configuration.";
-            }
-
-            var results = await CallBraveSearchApiAsync(args.Query, args.TopN ?? 10);
-            var response = FormatBraveSearchResults(results, args.TopN ?? 10);
-            _logger.LogInformation("Search completed successfully, returned {Count} results", results?.Web?.Results?.Count ?? 0);
-            return response;
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "Error performing browser search for query: {Query}", args.Query);
-            return "Error: Failed to perform search. Please try again.";
-        }
-    }
-
-    /// <summary>
     /// Performs a web search and returns results in JSON format.
     /// </summary>
     /// <param name="args">Search parameters including query and result count</param>
@@ -111,70 +82,6 @@ public class BrowserService
         {
             _logger.LogError(ex, "Error performing JSON browser search for query: {Query}", args.Query);
             return JsonSerializer.Serialize(new { error = $"Failed to perform search: {ex.Message}" });
-        }
-    }
-
-    /// <summary>
-    /// Opens a web page or scrolls to a location on an existing page.
-    /// </summary>
-    /// <param name="args">Open parameters including URL/ID, cursor, and location</param>
-    /// <returns>Formatted page content or error message</returns>
-    public async Task<string> OpenAsync(BrowserOpenArgs args)
-    {
-        _logger.LogInformation("Opening page - Id: {Id}, Cursor: {Cursor}, Location: {Loc}", args.Id, args.Cursor, args.Loc);
-
-        try
-        {
-            string url = "";
-            
-            // Determine the URL to open
-            if (args.Id is string urlString)
-            {
-                url = urlString;
-                _logger.LogDebug("Using direct URL: {Url}", url);
-            }
-            else if (args.Id is int linkId && linkId > 0)
-            {
-                url = GetUrlFromLinkId(linkId);
-                _logger.LogDebug("Resolved link ID {LinkId} to URL: {Url}", linkId, url);
-            }
-            else if (args.Cursor.HasValue && args.Cursor > 0 && _pages.ContainsKey(args.Cursor.Value))
-            {
-                // Scrolling on existing page
-                _logger.LogDebug("Scrolling on existing page with cursor: {Cursor}", args.Cursor.Value);
-                return ScrollToLocation(_pages[args.Cursor.Value], args.Loc ?? -1, args.NumLines ?? 20);
-            }
-            else
-            {
-                return "Error: No valid URL or page specified to open.";
-            }
-
-            if (string.IsNullOrEmpty(url))
-            {
-                return "Error: Could not determine URL to open.";
-            }
-
-            // Fetch the page content
-            var pageContent = await FetchPageContentAsync(url);
-            var page = new BrowserPage
-            {
-                Cursor = _nextCursor++,
-                Url = url,
-                Title = ExtractTitle(pageContent),
-                Content = pageContent,
-                Lines = SplitIntoLines(pageContent)
-            };
-
-            _pages[page.Cursor] = page;
-            _logger.LogInformation("Successfully loaded page '{Title}' with cursor {Cursor}", page.Title, page.Cursor);
-
-            // Return the formatted page content
-            return FormatPageContent(page, args.Loc ?? 1, args.NumLines ?? 20);
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "Error opening page with args: {@Args}", args);
-            return "Error: Failed to open page. Please check the URL and try again.";
         }
     }
 

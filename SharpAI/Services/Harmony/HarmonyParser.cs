@@ -1,15 +1,22 @@
-using System.Text.RegularExpressions;
 using SharpAI.Models;
+using System.Text.Json;
+using System.Text;
 
 namespace SharpAI.Services.Harmony;
 
 /// <summary>
-/// Parses Harmony format responses from language models.
-/// Handles incremental streaming, message extraction, and tool call identification.
+/// Parses Harmony format responses from language models using only the Openai.Harmony library.
+/// This version removes all legacy/fallback parsing and uses the library exclusively.
 /// </summary>
-public class HarmonyParser
+public class HarmonyParser : IDisposable
 {
     private readonly ILogger<HarmonyParser> _logger;
+    public List<HarmonyMessage> _messages { get; private set; } = new List<HarmonyMessage>();
+    private HarmonyMessage _currentMessage = new HarmonyMessage();
+    private HarmonyParserState _parserState = new HarmonyParserState();
+    private StringBuilder _rawContent = new StringBuilder();
+    private HarmonyAssistantContent _currentAssistantContent = new HarmonyAssistantContent();
+    public bool IsComplete { get; internal set; }
 
     /// <summary>
     /// Initializes a new instance of the HarmonyParser.
@@ -20,320 +27,385 @@ public class HarmonyParser
         _logger = logger;
     }
 
+    private void StartNewMessage()
+    {
+        FinishCurrentMessage();
+    }
+
+    public void ResetParserState()
+    {
+        _parserState = new HarmonyParserState();
+        _currentMessage = new HarmonyMessage();
+        _currentAssistantContent = new HarmonyAssistantContent();
+        _rawContent.Clear();
+        _messages.Clear();
+        IsComplete = false;
+    }
+
     /// <summary>
-    /// Parses incremental response tokens and updates stream state.
+    /// Parses new response tokens using the Harmony library's streaming parser.
     /// </summary>
-    /// <param name="state">Current stream state</param>
-    /// <param name="newToken">New token to process</param>
+    /// <param name="token">New token to process</param>
     /// <returns>Delta containing changes in this parsing step</returns>
-    public HarmonyStreamDelta ParseIncrementalResponse(HarmonyStreamState state, string newToken)
+    public HarmonyMessage ParseToken(string token)
     {
-        var delta = new HarmonyStreamDelta();
-        
-        // Append new token to raw response
-        state.RawResponse += newToken;
-        
-        // Check for completion tokens
-        if (state.RawResponse.Contains("<|call|>"))
-        {
-            state.IsComplete = true;
-            state.CompletionReason = "tool_calls";
-            delta.IsComplete = true;
-            delta.CompletionReason = "tool_calls";
-            _logger.LogDebug("Detected tool call completion token");
-        }
-        else if (state.RawResponse.Contains("<|return|>"))
-        {
-            state.IsComplete = true;
-            state.CompletionReason = "stop";
-            delta.IsComplete = true;
-            delta.CompletionReason = "stop";
-            _logger.LogDebug("Detected stop completion token");
-        }
+        _rawContent.Append(token);
 
-        // Parse current messages
-        var messages = ParseHarmonyMessages(state.RawResponse);
-        
-        // Extract final channel content
-        var finalMessages = messages.Where(m => m.Channel == "final").ToList();
-        if (finalMessages.Any())
+        // Handle special tokens according to Harmony format
+        switch (token)
         {
-            var currentFinalContent = string.Join(" ", finalMessages.Select(m => m.Content));
-            if (currentFinalContent.Length > state.LastFinalStreamedLength)
-            {
-                delta.FinalContent = currentFinalContent.Substring(state.LastFinalStreamedLength);
-                state.FinalContent = currentFinalContent;
-                state.LastFinalStreamedLength = currentFinalContent.Length;
-            }
-        }
+            case var t when t == HarmonyFormattingToken.Start.AsString():
+                // Beginning of a message - reset state and prepare for role parsing
+                _parserState.ParseState = HarmonyParseState.WaitingForRole;
+                _parserState.CurrentRole = null;
+                _parserState.CurrentChannel = null;
+                _parserState.RoleHeaderText.Clear(); // Reset role header accumulator
+                break;
 
-        // Extract analysis content (for reasoning tracking)
-        var analysisMessages = messages.Where(m => m.Channel == "analysis").ToList();
-        if (analysisMessages.Any())
+            case var t when t == HarmonyFormattingToken.Message.AsString():
+                // Transition from header to content
+                // Parse accumulated role header text if we haven't processed it yet
+                if (_parserState.RoleHeaderText.Length > 0 && _parserState.CurrentRole == null)
+                {
+                    ParseRole(_parserState.RoleHeaderText.ToString());
+                }
+                
+                // Parse accumulated channel header text before transitioning
+                if (_parserState.ChannelHeaderText.Length > 0)
+                {
+                    ParseChannelAndRecipient(_parserState.ChannelHeaderText.ToString());
+                }
+                
+                // If we're in constraint state, finalize the constraint type
+                if (_parserState.ParseState == HarmonyParseState.InConstraint)
+                {
+                    FinalizeConstraintTypeIfPending();
+                }
+                
+                _parserState.ParseState = HarmonyParseState.InMessageContent;
+                
+                // Initialize content based on role
+                InitializeMessageContent();
+                
+                // If we have a current channel for assistant content, set it
+                if (_parserState.CurrentChannel != null && _currentMessage.Role == HarmonyRole.Assistant)
+                {
+                    _currentAssistantContent.Channel = _parserState.CurrentChannel.Value;
+                }
+                break;
+
+            case var t when t == HarmonyFormattingToken.Channel.AsString():
+                // Transition to channel information in header
+                // Parse accumulated role header text before transitioning
+                if (_parserState.RoleHeaderText.Length > 0)
+                {
+                    ParseRole(_parserState.RoleHeaderText.ToString());
+                }
+                
+                _parserState.ParseState = HarmonyParseState.WaitingForChannel;
+                _parserState.ChannelHeaderText.Clear(); // Reset channel header accumulator
+                break;
+
+            case var t when t == HarmonyFormattingToken.EndMessage.AsString():
+                // End of message - mark as complete and start new message
+                _currentMessage.IsComplete = true;
+                FinishCurrentMessage();
+                return _messages.Last();
+
+            case var t when t == HarmonyFormattingToken.EndMessageAssistantToTool.AsString():
+                // Tool call stop token - finalize any pending constraint type and create tool call
+                FinalizeConstraintTypeIfPending();
+                CreateToolCallFromCurrentState();
+                _currentMessage.IsComplete = true;
+                FinishCurrentMessage();
+                IsComplete = true;
+                return _messages.Last();
+
+            case var t when t == HarmonyFormattingToken.EndMessageDoneSampling.AsString():
+                // Return stop token - finalize any pending constraint type and mark as complete
+                FinalizeConstraintTypeIfPending();
+                _currentMessage.IsComplete = true;
+                FinishCurrentMessage();
+                IsComplete = true;
+                return _messages.Last();
+
+            case var t when t == HarmonyFormattingToken.ConstrainedFormat.AsString():
+                // Data type definition in tool call - prepare to collect constraint type and arguments
+                _parserState.ParseState = HarmonyParseState.InConstraint;
+                _parserState.ToolCallArguments.Clear(); // Reset arguments collection
+                _parserState.ConstraintTypeText.Clear(); // Reset constraint type accumulator
+                break;
+
+            default:
+                // Regular content token - handle based on current state
+                HandleContentToken(token);
+                break;
+        }
+        if (_currentMessage != null &&
+        _currentMessage.Role == HarmonyRole.Assistant &&
+        (_parserState.CurrentChannel == HarmonyChannel.Final ||
+         _parserState.CurrentChannel == HarmonyChannel.Commentary) &&
+        _parserState.ParseState == HarmonyParseState.InMessageContent)
         {
-            var currentAnalysisContent = string.Join("\n", analysisMessages.Select(m => m.Content));
-            if (currentAnalysisContent != state.AnalysisContent)
-            {
-                delta.AnalysisContent = currentAnalysisContent.Substring(state.AnalysisContent.Length);
-                state.AnalysisContent = currentAnalysisContent;
-            }
+            return _currentMessage;
         }
-
-        // Extract function calls from commentary channel and browser calls from analysis channel
-        var functionCalls = messages.Where(m => 
-            m.Channel == "commentary" && 
-            !string.IsNullOrEmpty(m.Recipient) &&
-            m.Recipient.StartsWith("functions.", StringComparison.OrdinalIgnoreCase)).ToList();
-            
-        var browserCalls = messages.Where(m => 
-            m.Channel == "analysis" && 
-            !string.IsNullOrEmpty(m.Recipient) &&
-            m.Recipient.StartsWith("browser.", StringComparison.OrdinalIgnoreCase)).ToList();
-            
-        var newToolCalls = new List<HarmonyToolCall>();
-        
-        // Handle function calls
-        foreach (var toolCall in functionCalls)
-        {
-            var harmonyCall = new HarmonyToolCall
-            {
-                Name = toolCall.Recipient.Substring("functions.".Length),
-                Arguments = toolCall.Content,
-                Recipient = toolCall.Recipient
-            };
-
-            // Check if this is a new tool call
-            if (!state.ToolCalls.Any(tc => tc.Name == harmonyCall.Name && tc.Arguments == harmonyCall.Arguments))
-            {
-                state.ToolCalls.Add(harmonyCall);
-                newToolCalls.Add(harmonyCall);
-                state.HasToolCall = true;
-            }
-        }
-        
-        // Handle browser calls
-        foreach (var toolCall in browserCalls)
-        {
-            var harmonyCall = new HarmonyToolCall
-            {
-                Name = toolCall.Recipient.Substring("browser.".Length),
-                Arguments = toolCall.Content,
-                Recipient = toolCall.Recipient
-            };
-
-            // Check if this is a new tool call
-            if (!state.ToolCalls.Any(tc => tc.Name == harmonyCall.Name && tc.Arguments == harmonyCall.Arguments))
-            {
-                state.ToolCalls.Add(harmonyCall);
-                newToolCalls.Add(harmonyCall);
-                state.HasToolCall = true;
-            }
-        }
-
-        if (newToolCalls.Any())
-        {
-            delta.NewToolCalls = newToolCalls;
-            _logger.LogDebug("Found {Count} new tool calls", newToolCalls.Count);
-        }
-
-        return delta;
+        return null;
     }
 
-    /// <summary>
-    /// Parses a complete Harmony response and extracts all components.
-    /// </summary>
-    /// <param name="rawResponse">Complete raw response to parse</param>
-    /// <returns>Parsed response with content, reasoning, and tool calls</returns>
-    public ParsedResponse ParseCompleteResponse(string rawResponse)
+    private void FinishCurrentMessage()
     {
-        var response = new ParsedResponse
+        if (_currentMessage != null)
         {
-            Content = rawResponse,
-            FunctionCall = false,
-            Reasoning = null,
-            ToolCalls = new List<HarmonyToolCall>()
-        };
-
-        _logger.LogDebug("Parsing complete response with length: {Length}", rawResponse.Length);
-        try
-        {
-            var messages = ParseHarmonyMessages(rawResponse);
-            _logger.LogDebug("Parsed {MessageCount} harmony messages from response", messages.Count);
-            
-            // Extract content from final channel
-            var finalMessages = messages.Where(m => m.Channel == "final").ToList();
-            if (finalMessages.Any())
-            {
-                response.Content = string.Join(" ", finalMessages.Select(m => m.Content));
-                _logger.LogDebug("Extracted final channel content: {Content}", response.Content);
-            }
-
-            // Extract reasoning from analysis channel
-            var analysisMessages = messages.Where(m => m.Channel == "analysis").ToList();
-            if (analysisMessages.Any())
-            {
-                response.Reasoning = string.Join("\n", analysisMessages.Select(m => m.Content));
-            }
-
-            // Extract function calls from commentary channel
-            var functionCalls = messages.Where(m => 
-                m.Channel == "commentary" && 
-                !string.IsNullOrEmpty(m.Recipient) &&
-                m.Recipient.StartsWith("functions.", StringComparison.OrdinalIgnoreCase)).ToList();
-                
-            foreach (var toolCall in functionCalls)
-            {
-                response.ToolCalls.Add(new HarmonyToolCall
-                {
-                    Name = toolCall.Recipient.Substring("functions.".Length),
-                    Arguments = toolCall.Content,
-                    Recipient = toolCall.Recipient
-                });
-                response.FunctionCall = true;
-            }
-            
-            // Extract browser calls from analysis channel
-            var browserCalls = messages.Where(m => 
-                m.Channel == "analysis" && 
-                !string.IsNullOrEmpty(m.Recipient) &&
-                m.Recipient.StartsWith("browser.", StringComparison.OrdinalIgnoreCase)).ToList();
-                
-            foreach (var toolCall in browserCalls)
-            {
-                response.ToolCalls.Add(new HarmonyToolCall
-                {
-                    Name = toolCall.Recipient.Substring("browser.".Length),
-                    Arguments = toolCall.Content,
-                    Recipient = toolCall.Recipient
-                });
-                // Note: browser calls don't set FunctionCall = true as they're handled internally
-            }
-
-            // If no final channel content found, try to extract from the raw response
-            if (string.IsNullOrEmpty(response.Content))
-            {
-                _logger.LogDebug("No final channel content found, extracting from raw response");
-                response.Content = ExtractUserReadableContent(rawResponse);
-            }
-
-            _logger.LogInformation("Parsed response with {ToolCallCount} tool calls and {ContentLength} characters of content", 
-                response.ToolCalls.Count, response.Content?.Length ?? 0);
-            return response;
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(ex, "Failed to parse harmony response format, using raw response");
-            response.Content = rawResponse;
-            return response;
+            _messages.Add(_currentMessage);
+            _currentMessage = new HarmonyMessage();
+            _currentAssistantContent = new HarmonyAssistantContent();
+            _parserState = new HarmonyParserState();
         }
     }
 
-    /// <summary>
-    /// Parses Harmony messages from the response text using regex patterns.
-    /// </summary>
-    /// <param name="response">Raw response text to parse</param>
-    /// <returns>List of parsed Harmony messages</returns>
-    private List<HarmonyMessage> ParseHarmonyMessages(string response)
+    private void HandleContentToken(string token)
     {
-        var messages = new List<HarmonyMessage>();
-        
-        // Pattern to match harmony messages with flexible ordering
-        var messagePattern = @"<\|start\|>([^<|]+?)(?:<\|channel\|>([^<|]+?))?(?:\s+to=([^\s<|]+?))?(?:\s*<\|constrain\|>\s*([^<|]+?))?<\|message\|>(.*?)(?:<\|end\|>|<\|call\|>|<\|return\|>|$)";
-        var matches = Regex.Matches(response, messagePattern, RegexOptions.Singleline | RegexOptions.IgnoreCase);
-
-        foreach (Match match in matches)
+        switch (_parserState.ParseState)
         {
-            var role = match.Groups[1].Value.Trim();
-            var channel = match.Groups[2].Success ? match.Groups[2].Value.Trim() : null;
-            var recipient = match.Groups[3].Success ? match.Groups[3].Value.Trim() : null;
-            var constraint = match.Groups[4].Success ? match.Groups[4].Value.Trim() : null;
-            var content = match.Groups[5].Value.Trim();
+            case HarmonyParseState.WaitingForRole:
+                // Accumulate role tokens
+                _parserState.RoleHeaderText.Append(token);
+                break;
 
-            messages.Add(new HarmonyMessage
-            {
-                Role = role,
-                Channel = channel,
-                Recipient = recipient,
-                Constraint = constraint,
-                Content = content
-            });
-        }
+            case HarmonyParseState.WaitingForChannel:
+                // Parse channel from token, may include recipient syntax
+                _parserState.ChannelHeaderText.Append(token);
+                break;
 
-        // Fallback: Look for browser tool calls in a more flexible format
-        // This handles cases where the model generates: to=browser.search <|constrain|>json<|message|>{...}
-        var browserCallPattern = @"to=(browser\.\w+)\s*<\|constrain\|>\s*json<\|message\|>(\{[^}]*\})";
-        var browserMatches = Regex.Matches(response, browserCallPattern, RegexOptions.Singleline | RegexOptions.IgnoreCase);
-        
-        foreach (Match match in browserMatches)
-        {
-            var recipient = match.Groups[1].Value.Trim();
-            var content = match.Groups[2].Value.Trim();
-            
-            // Only add if we don't already have this browser call
-            if (!messages.Any(m => m.Recipient == recipient && m.Content == content))
-            {
-                messages.Add(new HarmonyMessage
+            case HarmonyParseState.InMessageContent:
+                // Add content to current channel or message
+                if (_parserState.CurrentChannel != null && _currentMessage.Role == HarmonyRole.Assistant)
                 {
-                    Role = "assistant",
-                    Channel = "analysis", // Browser calls should be in analysis channel
-                    Recipient = recipient,
-                    Constraint = "json",
-                    Content = content
-                });
-                
-                _logger.LogDebug("Fallback browser call parsed: {Recipient} with args {Content}", recipient, content);
-            }
-        }
+                    if (_currentAssistantContent.Content == null)
+                    {
+                        _currentAssistantContent.Content = string.Empty;
+                    }
+                    _currentAssistantContent.Content += token;
+                }
+                else if (_currentMessage.Role != HarmonyRole.Assistant)
+                {
+                    // For non-assistant messages, add to text content
+                    var textContent = _currentMessage.Content.OfType<HarmonyTextContent>().FirstOrDefault();
+                    if (textContent != null)
+                    {
+                        textContent.Text += token;
+                    }
+                }
+                break;
 
-        _logger.LogDebug("Parsed {MessageCount} Harmony messages from response", messages.Count);
-        return messages;
+            case HarmonyParseState.InConstraint:
+                // Handle constraint content for tool calls - only collect constraint type
+                // Arguments will come as regular message content after <|message|> token
+                if (string.IsNullOrEmpty(_parserState.ConstraintType))
+                {
+                    // Only accumulate constraint type tokens (e.g., "json")
+                    // The <|message|> token will end this state and arguments follow as content
+                    _parserState.ConstraintTypeText.Append(token);
+                }
+                // Note: We don't handle arguments here anymore, they come as message content
+                break;
+
+            case HarmonyParseState.WaitingForStart:
+            default:
+                // Ignore tokens when not in a valid state
+                break;
+        }
     }
 
-    /// <summary>
-    /// Extracts user-readable content from raw response as fallback.
-    /// </summary>
-    /// <param name="rawResponse">Raw response text</param>
-    /// <returns>Extracted user-readable content</returns>
-    private string ExtractUserReadableContent(string rawResponse)
+    private void InitializeMessageContent()
     {
-        try
+        if (_currentMessage == null)
         {
-            // First try to find final channel content
-            var finalMatch = Regex.Match(rawResponse, @"<\|channel\|>final<\|message\|>(.*?)(?:<\|return\|>|<\|end\|>|$)", RegexOptions.Singleline | RegexOptions.IgnoreCase);
-            if (finalMatch.Success && !string.IsNullOrEmpty(finalMatch.Groups[1].Value.Trim()))
+            _currentMessage = new HarmonyMessage();
+        }
+        
+        if (!_currentMessage.Content.Any())
+        {
+            switch (_currentMessage.Role)
             {
-                return finalMatch.Groups[1].Value.Trim();
+                case HarmonyRole.Assistant:
+                    _currentMessage.Content.Add(_currentAssistantContent);
+                    break;
+                case HarmonyRole.System:
+                    _currentMessage.Content.Add(new HarmonySystemContent());
+                    break;
+                case HarmonyRole.Developer:
+                    _currentMessage.Content.Add(new HarmonyDeveloperContent());
+                    break;
+                default:
+                    _currentMessage.Content.Add(new HarmonyTextContent());
+                    break;
             }
+        }
+    }
 
-            // If no final channel, look for any assistant message that's not analysis
-            var assistantMatches = Regex.Matches(rawResponse, @"<\|start\|>assistant<\|channel\|>([^<]+)<\|message\|>(.*?)(?:<\|end\|>|<\|return\|>|<\|call\|>|$)", RegexOptions.Singleline | RegexOptions.IgnoreCase);
-            
-            foreach (Match match in assistantMatches)
+    private void ParseChannelAndRecipient(string token)
+    {
+        // Parse channel and potential recipient from token like "commentary to=functions.get_current_weather"
+        var parts = token.Trim().Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        
+        if (parts.Length > 0)
+        {
+            // First part is the channel
+            if (TryParseChannel(parts[0], out var channel))
             {
-                var channel = match.Groups[1].Value.Trim();
-                var content = match.Groups[2].Value.Trim();
-                
-                // Skip analysis channel, return final or commentary content
-                if (channel != "analysis" && !string.IsNullOrEmpty(content))
+                _parserState.CurrentChannel = channel;
+            }
+            
+            // Look for "to=recipient" in remaining parts
+            for (int i = 1; i < parts.Length; i++)
+            {
+                if (parts[i].StartsWith("to="))
                 {
-                    return content;
+                    _parserState.CurrentRecipient = parts[i].Substring(3); // Remove "to=" prefix
+                    break;
                 }
             }
-
-            // Last resort: look for any content after assistant without channel
-            var simpleMatch = Regex.Match(rawResponse, @"<\|start\|>assistant[^<]*<\|message\|>(.*?)(?:<\|end\|>|<\|return\|>|<\|call\|>|$)", RegexOptions.Singleline | RegexOptions.IgnoreCase);
-            if (simpleMatch.Success && !string.IsNullOrEmpty(simpleMatch.Groups[1].Value.Trim()))
-            {
-                return simpleMatch.Groups[1].Value.Trim();
-            }
-
-            // If all else fails, return a helpful message
-            return "I'm processing your request...";
         }
-        catch (Exception ex)
+    }
+
+    private void ParseRole(string roleText)
+    {
+        if (TryParseRole(roleText, out var role))
         {
-            _logger.LogWarning(ex, "Failed to extract user-readable content from response");
-            return "I'm processing your request...";
+            _currentMessage.Role = role.Value;
+            _parserState.CurrentRole = role;
         }
+    }
+
+    private void FinalizeConstraintTypeIfPending()
+    {
+        // If we have accumulated constraint type text but haven't finalized it yet, do so now
+        if (string.IsNullOrEmpty(_parserState.ConstraintType) && _parserState.ConstraintTypeText.Length > 0)
+        {
+            _parserState.ConstraintType = _parserState.ConstraintTypeText.ToString().Trim();
+        }
+    }
+
+    private void CreateToolCallFromCurrentState()
+    {
+        if (_parserState.CurrentRecipient != null && _currentMessage.Role == HarmonyRole.Assistant)
+        {
+            var toolCall = new HarmonyToolCall
+            {
+                Recipient = _parserState.CurrentRecipient,
+                ToolName = ExtractToolNameFromRecipient(_parserState.CurrentRecipient),
+                Namespace = ExtractNamespaceFromRecipient(_parserState.CurrentRecipient),
+                Arguments = _currentAssistantContent.Content ?? string.Empty, // Use message content as arguments
+                ConstraintType = _parserState.ConstraintType
+            };
+
+            _currentAssistantContent.Content = null; // Clear content as it's now in tool call
+
+            _currentAssistantContent.ToolCall = toolCall;
+        }
+    }
+
+    private string ExtractToolNameFromRecipient(string recipient)
+    {
+        // Extract tool name from recipient like "functions.get_current_weather"
+        var lastDotIndex = recipient.LastIndexOf('.');
+        return lastDotIndex >= 0 ? recipient.Substring(lastDotIndex + 1) : recipient;
+    }
+
+    private string ExtractNamespaceFromRecipient(string recipient)
+    {
+        // Extract namespace from recipient like "functions.get_current_weather" => "functions"
+        // or "browser.search" => "browser"
+        var firstDotIndex = recipient.IndexOf('.');
+        return firstDotIndex >= 0 ? recipient.Substring(0, firstDotIndex) : recipient;
+    }
+
+    private bool TryParseRole(string roleStr, out HarmonyRole? role)
+    {
+        role = null;
+        try
+        {
+            role = HarmonyRoleExtensions.FromString(roleStr.Trim());
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private bool TryParseChannel(string channelStr, out HarmonyChannel? channel)
+    {
+        channel = null;
+        try
+        {
+            channel = HarmonyChannelExtensions.FromString(channelStr.Trim());
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+    
+    public HarmonyResponse GetResponse()
+    {
+        if (_currentMessage != null && !_currentMessage.IsComplete)
+        {
+            // Finalize any pending parsing
+            if (_parserState.RoleHeaderText.Length > 0 && _parserState.CurrentRole == null)
+            {
+                ParseRole(_parserState.RoleHeaderText.ToString());
+            }
+            
+            if (_parserState.ChannelHeaderText.Length > 0 && _parserState.CurrentChannel == null)
+            {
+                ParseChannelAndRecipient(_parserState.ChannelHeaderText.ToString());
+            }
+            
+            FinalizeConstraintTypeIfPending();
+            
+            _currentMessage.IsComplete = true;
+            if(_parserState.CurrentRecipient != null && _currentMessage.Role == HarmonyRole.Assistant)
+            {
+                CreateToolCallFromCurrentState();
+            }
+            _messages.Add(_currentMessage);
+            _currentMessage = null;
+        }
+        return new HarmonyResponse { Messages = this._messages };
+    }
+
+    /// <summary>
+    /// Dispose of resources
+    /// </summary>
+    public void Dispose()
+    {
+        _messages.Clear();
+        _messages = null;
+        _currentMessage = null;
+    }
+
+    private class HarmonyParserState
+    {
+        public HarmonyRole? CurrentRole { get; set; }
+        public HarmonyChannel? CurrentChannel { get; set; }
+        public HarmonyParseState ParseState { get; set; } = HarmonyParseState.WaitingForStart;
+        public string? CurrentRecipient { get; set; }
+        public string? ConstraintType { get; set; }
+        public StringBuilder ToolCallArguments { get; set; } = new StringBuilder();
+        public StringBuilder ChannelHeaderText { get; set; } = new StringBuilder();
+        public StringBuilder RoleHeaderText { get; set; } = new StringBuilder();
+        public StringBuilder ConstraintTypeText { get; set; } = new StringBuilder();
+    }
+
+    private enum HarmonyParseState
+    {
+        WaitingForStart,
+        WaitingForRole,
+        WaitingForChannel,
+        InMessageContent,
+        InConstraint
     }
 }

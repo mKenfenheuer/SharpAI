@@ -1,5 +1,6 @@
 using LLama;
 using LLama.Common;
+using Microsoft.Extensions.DependencyInjection;
 using SharpAI.Models;
 using SharpAI.Services.Harmony;
 using System.Text;
@@ -14,30 +15,22 @@ public class LLamaSharpService : IDisposable
 {
     private readonly LLamaModelManager _modelManager;
     private readonly ILogger<LLamaSharpService> _logger;
-    private readonly StreamingInferenceEngine _streamingEngine;
-    private readonly HarmonyParser _harmonyParser;
-    private readonly HarmonyFormatter _harmonyFormatter;
+    private readonly IServiceProvider _serviceProvider;
 
     /// <summary>
     /// Initializes a new instance of the LLamaSharpService.
     /// </summary>
     /// <param name="modelManager">Model manager for loading and managing models</param>
     /// <param name="logger">Logger for service operations</param>
-    /// <param name="streamingEngine">Streaming inference engine</param>
-    /// <param name="harmonyParser">Parser for harmony format responses</param>
-    /// <param name="harmonyFormatter">Formatter for harmony format prompts</param>
+    /// <param name="serviceProvider">Service provider for retrieving scoped services</param>
     public LLamaSharpService(
         LLamaModelManager modelManager, 
         ILogger<LLamaSharpService> logger,
-        StreamingInferenceEngine streamingEngine,
-        HarmonyParser harmonyParser,
-        HarmonyFormatter harmonyFormatter)
+        IServiceProvider serviceProvider)
     {
         _modelManager = modelManager;
         _logger = logger;
-        _streamingEngine = streamingEngine;
-        _harmonyParser = harmonyParser;
-        _harmonyFormatter = harmonyFormatter;
+        _serviceProvider = serviceProvider;
     }
 
     /// <summary>
@@ -47,6 +40,10 @@ public class LLamaSharpService : IDisposable
     /// <returns>Chat completion response</returns>
     public async Task<ChatCompletionResponse> GenerateChatCompletionAsync(ChatCompletionRequest request)
     {
+        using var scope = _serviceProvider.CreateScope();
+        var streamingEngine = scope.ServiceProvider.GetRequiredService<StreamingInferenceEngine>();
+        var harmonyFormatter = scope.ServiceProvider.GetRequiredService<HarmonyFormatter>();
+
         var requestedModel = request.Model ?? "gpt-4";
         _logger.LogInformation("Requested model: {RequestedModel}", requestedModel);
 
@@ -81,39 +78,51 @@ public class LLamaSharpService : IDisposable
 
         // Use unified streaming engine but collect all results
         var contentBuilder = new StringBuilder();
-        ParsedResponse? finalParsedResponse = null;
+        HarmonyResponse? finalHarmonyResponse = null;
         var reasoningTokens = 0;
 
-        await foreach (var result in _streamingEngine.GenerateStreamAsync(allMessages, request, modelInstance, inferenceParams))
+        await foreach (var result in streamingEngine.GenerateStreamAsync(allMessages, request, modelInstance, inferenceParams))
         {
-            if (result.IsComplete && result.ParsedResponse != null)
+            if (result.IsComplete && result.HarmonyResponse != null)
             {
-                finalParsedResponse = result.ParsedResponse;
+                finalHarmonyResponse = result.HarmonyResponse;
                 break;
             }
 
-            if (result.Delta?.FinalContent != null)
+            if (result.Delta != null)
             {
-                contentBuilder.Append(result.Delta.FinalContent);
+                // Extract content from harmony message delta
+                var deltaContent = ExtractContentFromHarmonyMessage(result.Delta);
+                if (!string.IsNullOrEmpty(deltaContent))
+                {
+                    contentBuilder.Append(deltaContent);
+                }
             }
         }
 
-        // Use the parsed response from streaming engine
-        var parsedResponse = finalParsedResponse ?? new ParsedResponse
+        // Use the harmony response from streaming engine
+        var harmonyResponse = finalHarmonyResponse ?? new HarmonyResponse
         {
-            Content = contentBuilder.ToString(),
-            ToolCalls = new List<HarmonyToolCall>(),
-            FunctionCall = false,
-            Reasoning = null
+            Messages = new List<HarmonyMessage>()
         };
 
-        var assistantMessage = new ChatMessage { Role = ChatRole.Assistant, Content = parsedResponse.Content };
+        // Extract final content and tool calls from harmony response
+        var finalContent = harmonyResponse.ExtractFinalContent();
+        var toolCalls = harmonyResponse.ToolCall != null ? new List<HarmonyToolCall> { harmonyResponse.ToolCall } : new List<HarmonyToolCall>();
+
+        // Use content builder if no final content extracted
+        if (string.IsNullOrEmpty(finalContent))
+        {
+            finalContent = contentBuilder.ToString();
+        }
+
+        var assistantMessage = new ChatMessage { Role = ChatRole.Assistant, Content = finalContent };
         var finishReason = "stop";
 
         // Check if the response contains function calls
-        if (parsedResponse.ToolCalls.Any() || parsedResponse.FunctionCall)
+        if (toolCalls.Any())
         {
-            assistantMessage.ToolCalls = LLamaUtilities.ConvertHarmonyToolCalls(parsedResponse.ToolCalls);
+            assistantMessage.ToolCalls = LLamaUtilities.ConvertHarmonyToolCalls(toolCalls);
             assistantMessage.Content = null;
             finishReason = "tool_calls";
 
@@ -125,9 +134,10 @@ public class LLamaSharpService : IDisposable
         }
 
         // Calculate reasoning tokens if reasoning was used
-        if (request.ReasoningEffort.HasValue && !string.IsNullOrEmpty(parsedResponse.Reasoning))
+        var reasoningContent = harmonyResponse.ExtractReasoningContent();
+        if (request.ReasoningEffort.HasValue && !string.IsNullOrEmpty(reasoningContent))
         {
-            reasoningTokens = LLamaUtilities.EstimateReasoningTokens(parsedResponse.Reasoning, request.ReasoningEffort.Value);
+            reasoningTokens = LLamaUtilities.EstimateReasoningTokens(reasoningContent, request.ReasoningEffort.Value);
         }
 
         var response = new ChatCompletionResponse
@@ -147,8 +157,8 @@ public class LLamaSharpService : IDisposable
             },
             Usage = new TokenUsage
             {
-                PromptTokens = LLamaUtilities.EstimateTokens(_harmonyFormatter.FormatPrompt(allMessages, request.Tools?.Any() == true, request.ReasoningEffort ?? ReasoningEffortLevel.Medium, request.Tools, request.ResponseFormat)),
-                CompletionTokens = LLamaUtilities.EstimateTokens(parsedResponse.Content ?? ""),
+                PromptTokens = LLamaUtilities.EstimateTokens(harmonyFormatter.FormatPrompt(allMessages, request.Tools?.Any() == true, request.ReasoningEffort ?? ReasoningEffortLevel.Medium, request.Tools, request.ResponseFormat)),
+                CompletionTokens = LLamaUtilities.EstimateTokens(finalContent ?? ""),
                 ReasoningTokens = reasoningTokens > 0 ? reasoningTokens : null,
                 TotalTokens = 0 // Will be calculated
             }
@@ -156,148 +166,6 @@ public class LLamaSharpService : IDisposable
 
         response.Usage.TotalTokens = response.Usage.PromptTokens + response.Usage.CompletionTokens + reasoningTokens;
         return response;
-    }
-
-    /// <summary>
-    /// Generates a chat completion as an async stream of chunks. Each chunk follows the OpenAI streaming format.
-    /// </summary>
-    /// <param name="request">Chat completion request</param>
-    /// <returns>Async enumerable of chat completion chunks</returns>
-    public async IAsyncEnumerable<ChatCompletionChunk> GenerateChatCompletionStreamAsync(ChatCompletionRequest request)
-    {
-        var requestedModel = request.Model ?? "gpt-4";
-        _logger.LogInformation("Requested model for streaming: {RequestedModel}", requestedModel);
-        
-        // Validate tool definitions if provided
-        if (request.Tools?.Any() == true)
-        {
-            var validationResults = FunctionSchemaValidator.ValidateToolDefinitions(request.Tools);
-            if (validationResults.Any())
-            {
-                var errorMessage = "Invalid function definitions: " + 
-                    string.Join("; ", validationResults.SelectMany(kvp => kvp.Value.Select(err => $"{kvp.Key}: {err}")));
-                _logger.LogError("Tool validation failed: {ValidationErrors}", errorMessage);
-                throw new ArgumentException(errorMessage);
-            }
-        }
-        
-        ModelInstance modelInstance;
-        try
-        {
-            modelInstance = await _modelManager.GetModelAsync(requestedModel);
-        }
-        catch (ArgumentException ex)
-        {
-            _logger.LogError(ex, "Invalid model requested for streaming: {ModelName}", requestedModel);
-            throw new ArgumentException($"Model '{requestedModel}' is not available. Use /v1/models to see available models.", ex);
-        }
-        
-        var inferenceParams = LLamaUtilities.CreateInferenceParams(request, modelInstance);
-        var completionId = LLamaUtilities.CreateCompletionId();
-        var created = LLamaUtilities.GetCurrentUnixTimestamp();
-
-        // Prepare messages with default system prompt if needed
-        var allMessages = PrepareMessages(request.Messages);
-
-        // Send initial chunk
-        yield return new ChatCompletionChunk
-        {
-            Id = completionId,
-            Object = CompletionObjectType.ChatCompletionChunk,
-            Created = created,
-            Model = request.Model,
-            Choices = new List<ChatCompletionChunkChoice>
-            {
-                new ChatCompletionChunkChoice
-                {
-                    Index = 0,
-                    Delta = new ChatMessage { Role = ChatRole.Assistant, Content = "" },
-                    FinishReason = null
-                }
-            }
-        };
-
-        // Use unified streaming engine
-        ParsedResponse? finalParsedResponse = null;
-
-        await foreach (var result in _streamingEngine.GenerateStreamAsync(allMessages, request, modelInstance, inferenceParams))
-        {
-            if (result.IsComplete && result.ParsedResponse != null)
-            {
-                finalParsedResponse = result.ParsedResponse;
-                break;
-            }
-
-            // Stream content deltas
-            if (result.Delta?.FinalContent != null)
-            {
-                yield return new ChatCompletionChunk
-                {
-                    Id = completionId,
-                    Object = CompletionObjectType.ChatCompletionChunk,
-                    Created = created,
-                    Model = request.Model,
-                    Choices = new List<ChatCompletionChunkChoice>
-                    {
-                        new ChatCompletionChunkChoice
-                        {
-                            Index = 0,
-                            Delta = new ChatMessage { Role = ChatRole.Assistant, Content = result.Delta.FinalContent },
-                            FinishReason = null
-                        }
-                    }
-                };
-            }
-        }
-
-        // Send tool calls if present
-        if (finalParsedResponse?.ToolCalls.Any() == true)
-        {
-            var toolCalls = LLamaUtilities.ConvertHarmonyToolCalls(finalParsedResponse.ToolCalls);
-            
-            foreach (var toolCall in toolCalls)
-            {
-                yield return new ChatCompletionChunk
-                {
-                    Id = completionId,
-                    Object = CompletionObjectType.ChatCompletionChunk,
-                    Created = created,
-                    Model = request.Model,
-                    Choices = new List<ChatCompletionChunkChoice>
-                    {
-                        new ChatCompletionChunkChoice
-                        {
-                            Index = 0,
-                            Delta = new ChatMessage 
-                            { 
-                                Role = ChatRole.Assistant, 
-                                ToolCalls = new List<ToolCall> { toolCall }
-                            },
-                            FinishReason = null
-                        }
-                    }
-                };
-            }
-        }
-
-        // Send final chunk
-        var finishReason = finalParsedResponse?.ToolCalls.Any() == true ? "tool_calls" : "stop";
-        yield return new ChatCompletionChunk
-        {
-            Id = completionId,
-            Object = CompletionObjectType.ChatCompletionChunk,
-            Created = created,
-            Model = request.Model,
-            Choices = new List<ChatCompletionChunkChoice>
-            {
-                new ChatCompletionChunkChoice
-                {
-                    Index = 0,
-                    Delta = new ChatMessage { Role = ChatRole.Assistant },
-                    FinishReason = finishReason
-                }
-            }
-        };
     }
 
     /// <summary>
@@ -317,6 +185,24 @@ public class LLamaSharpService : IDisposable
         }
 
         return allMessages;
+    }
+
+    /// <summary>
+    /// Extracts readable content from a HarmonyMessage
+    /// </summary>
+    /// <param name="message">The HarmonyMessage to extract content from</param>
+    /// <returns>Extracted content string</returns>
+    private string ExtractContentFromHarmonyMessage(HarmonyMessage message)
+    {
+        if (message?.Content == null)
+            return string.Empty;
+
+        // Get text content from the message
+        var textContent = message.Content
+            .OfType<HarmonyTextContent>()
+            .FirstOrDefault();
+
+        return textContent?.Text ?? string.Empty;
     }
 
     public void Dispose()

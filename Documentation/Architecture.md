@@ -99,7 +99,7 @@ public class LLamaSharpService : IDisposable
 
 ### Harmony System
 
-The Harmony system is SharpAI's advanced AI orchestration framework that enables sophisticated tool calling and multi-modal interactions.
+The Harmony system is SharpAI's advanced AI orchestration framework that enables sophisticated tool calling and multi-modal interactions. **SharpAI now uses the external Openai.Harmony library** for improved parsing and rendering capabilities.
 
 #### Components
 
@@ -119,23 +119,42 @@ public class StreamingInferenceEngine
 }
 ```
 
-**`HarmonyFormatter`**
-- Converts OpenAI-style messages to Harmony prompt format
+**`HarmonyFormatter`** (Updated)
+- Converts OpenAI-style messages to Harmony conversation format using the Openai.Harmony library
+- Leverages the library's `HarmonyEncoding` for tokenization and rendering
 - Handles tool definitions and response format specifications
 - Supports reasoning effort levels
-- Optimizes prompts for better model performance
+- Provides both library-based and legacy formatting methods
 
-**`HarmonyParser`**
-- Parses model responses in Harmony format
-- Extracts tool calls and function arguments
-- Handles streaming response parsing
-- Validates tool call syntax
+**`HarmonyParser`** (Updated)
+- Parses model responses using the Openai.Harmony library's `StreamableParser`
+- Supports both token-based and text-based parsing for compatibility
+- Extracts tool calls and function arguments from responses
+- Handles streaming response parsing with proper state management
+- Falls back to legacy parsing when needed
 
 **`BrowserToolHandler`**
 - Implements web browsing capabilities
 - Integrates with Brave Search API
 - Handles web page content extraction
 - Provides web navigation automation
+
+#### Harmony Library Integration
+
+The refactored system now integrates with the **Openai.Harmony library** which provides:
+
+- **Native tokenization**: Direct access to the Harmony encoding for precise token-level operations
+- **Streaming parser**: Real-time parsing of streaming responses with proper state management
+- **Conversation rendering**: Optimized rendering of conversations for completion
+- **Robust parsing**: Handles complex message structures and tool calls
+- **Performance optimizations**: Efficient token encoding/decoding operations
+
+**Key Benefits:**
+- More accurate parsing of Harmony format responses
+- Better handling of streaming content
+- Improved tool call detection and extraction
+- Standardized conversation format handling
+- Enhanced performance through native implementation
 
 #### Tool Calling Flow
 

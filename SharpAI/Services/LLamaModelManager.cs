@@ -207,17 +207,13 @@ namespace SharpAI.Services
                 var context = weights.CreateContext(parameters);
                 var executor = new InteractiveExecutor(context);
 
-                // Load Jinja template
-                var template = await LoadJinjaTemplateAsync(config, weights);
-
                 var modelInstance = new ModelInstance
                 {
                     Name = config.Name,
                     Weights = weights,
                     Context = context,
                     Executor = executor,
-                    Configuration = config,
-                    Template = template
+                    Configuration = config
                 };
 
                 _logger.LogInformation("Successfully loaded model {ModelName}", config.Name);
@@ -228,20 +224,6 @@ namespace SharpAI.Services
                 _logger.LogError(ex, "Failed to load model {ModelName} from {Path}", config.Name, modelPath);
                 throw new InvalidOperationException($"Failed to load model {config.Name}: {ex.Message}", ex);
             }
-        }
-
-        /// <summary>
-        /// Loads Jinja template for the model (GPT-OSS models use harmony format instead).
-        /// </summary>
-        /// <param name="config">Model configuration</param>
-        /// <param name="weights">Loaded model weights</param>
-        /// <returns>Template instance or null for harmony format models</returns>
-        private async Task<LLamaTemplate?> LoadJinjaTemplateAsync(ModelConfiguration config, LLamaWeights weights)
-        {
-            // GPT-OSS models use harmony format, not Jinja templates
-            // Return null as templates are handled by the harmony formatter in LLamaSharp service
-            _logger.LogDebug("Using harmony format for GPT-OSS model {ModelName}, no template needed", config.Name);
-            return null;
         }
 
         /// <summary>
@@ -392,7 +374,6 @@ namespace SharpAI.Services
         public LLamaContext? Context { get; set; }
         public InteractiveExecutor? Executor { get; set; }
         public ModelConfiguration? Configuration { get; set; }
-        public LLamaTemplate? Template { get; set; }
 
         public void Dispose()
         {

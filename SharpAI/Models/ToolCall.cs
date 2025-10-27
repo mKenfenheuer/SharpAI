@@ -4,17 +4,14 @@ namespace SharpAI.Models
 {
     public class ToolCall
     {
-        [JsonPropertyName("id")]
-        public required string Id { get; set; }
-
         [JsonPropertyName("type")]
         public required ToolType Type { get; set; }
 
         [JsonPropertyName("function")]
         public FunctionCall? Function { get; set; }
 
-        // For streaming compatibility, some responses might include call_id
-        [JsonPropertyName("call_id")]
+        // For streaming compatibility, some responses might include call id
+        [JsonPropertyName("id")]
         public string? CallId { get; set; }
     }
 
@@ -22,6 +19,9 @@ namespace SharpAI.Models
     {
         [JsonPropertyName("name")]
         public required string Name { get; set; }
+
+        [JsonIgnore]
+        public string Namespace { get; set; } = "functions"; // Default namespace
 
         [JsonPropertyName("arguments")]
         public required string Arguments { get; set; } // JSON string

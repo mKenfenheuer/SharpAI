@@ -38,9 +38,9 @@ public class BrowserToolHandler
         {
             return functionName switch
             {
-                "search" => await HandleSearchAsync(arguments),
+                "search" => await HandleSearchJsonAsync(arguments),
                 "searchjson" => await HandleSearchJsonAsync(arguments),
-                "open" => await HandleOpenAsync(arguments),
+                "open" => await HandleOpenJsonAsync(arguments),
                 "openjson" => await HandleOpenJsonAsync(arguments),
                 "find" => await HandleFindAsync(arguments),
                 _ => $"Error: Unknown browser function '{functionName}'"
@@ -51,23 +51,6 @@ public class BrowserToolHandler
             _logger.LogError(ex, "Error handling browser tool call: {FunctionName}", functionName);
             return $"Error: Failed to execute browser function '{functionName}': {ex.Message}";
         }
-    }
-
-    /// <summary>
-    /// Handles search function calls.
-    /// </summary>
-    /// <param name="arguments">JSON arguments for search</param>
-    /// <returns>Search results</returns>
-    private async Task<string> HandleSearchAsync(string arguments)
-    {
-        var args = JsonSerializer.Deserialize<BrowserSearchArgs>(arguments);
-        if (args == null)
-        {
-            _logger.LogWarning("Invalid search arguments provided");
-            return "Error: Invalid search arguments";
-        }
-
-        return await _browserService.SearchAsync(args);
     }
 
     /// <summary>
@@ -85,23 +68,6 @@ public class BrowserToolHandler
         }
 
         return await _browserService.SearchJsonAsync(args);
-    }
-
-    /// <summary>
-    /// Handles page open function calls.
-    /// </summary>
-    /// <param name="arguments">JSON arguments for opening a page</param>
-    /// <returns>Page content</returns>
-    private async Task<string> HandleOpenAsync(string arguments)
-    {
-        var args = JsonSerializer.Deserialize<BrowserOpenArgs>(arguments);
-        if (args == null)
-        {
-            _logger.LogWarning("Invalid open arguments provided");
-            return "Error: Invalid open arguments";
-        }
-
-        return await _browserService.OpenAsync(args);
     }
 
     /// <summary>

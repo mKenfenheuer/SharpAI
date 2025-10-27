@@ -8,7 +8,7 @@ namespace SharpAI.Models
         public required ChatRole Role { get; set; }
 
         [JsonPropertyName("content")]
-        public object? Content { get; set; } // string | array (text, image, audio, etc.)
+        public string? Content { get; set; } // string | array (text, image, audio, etc.)
 
         [JsonPropertyName("name")]
         public string? Name { get; set; }

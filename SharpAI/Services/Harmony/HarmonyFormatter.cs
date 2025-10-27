@@ -1,13 +1,14 @@
+using System.Text.Json;
 using System.Text;
 using SharpAI.Models;
 
 namespace SharpAI.Services.Harmony;
 
 /// <summary>
-/// Formats chat messages and tool definitions into the Harmony prompt format.
-/// Handles message conversion, tool definitions, response format specifications, and reasoning effort levels.
+/// Formats chat messages and tool definitions into the Harmony prompt format using the Openai.Harmony library.
+/// This version uses only the library without any fallback or custom formatting.
 /// </summary>
-public class HarmonyFormatter
+public class HarmonyFormatter : IDisposable
 {
     private readonly ILogger<HarmonyFormatter> _logger;
 
@@ -21,7 +22,7 @@ public class HarmonyFormatter
     }
 
     /// <summary>
-    /// Formats chat messages and configuration into a Harmony-compatible prompt.
+    /// Formats chat messages and configuration into a Harmony-compatible prompt using the Openai.Harmony library.
     /// </summary>
     /// <param name="messages">List of chat messages to format</param>
     /// <param name="hasFunctions">Whether function calling is enabled</param>
@@ -31,611 +32,302 @@ public class HarmonyFormatter
     /// <returns>Formatted prompt string</returns>
     public string FormatPrompt(List<ChatMessage> messages, bool hasFunctions, ReasoningEffortLevel reasoningEffort, List<ToolDefinition>? tools = null, ResponseFormat? responseFormat = null)
     {
-        var prompt = new StringBuilder();
         _logger.LogDebug("Formatting prompt with {MessageCount} messages, functions: {HasFunctions}, reasoning: {ReasoningEffort}", 
             messages.Count, hasFunctions, reasoningEffort);
 
-        // System message with harmony format
-        prompt.AppendLine($"<|start|>system<|message|>You are ChatGPT, a large language model trained by OpenAI.");
-        prompt.AppendLine("Knowledge cutoff: 2024-06");
-        prompt.AppendLine($"Current date: {DateTime.Now:yyyy-MM-dd}");
-        prompt.AppendLine();
-        prompt.AppendLine($"Reasoning: {reasoningEffort.ToString().ToLower()}");
-        prompt.AppendLine();
-        
-        // Add browser tool definition
-        prompt.AppendLine("# Tools");
-        prompt.AppendLine();
-        prompt.AppendLine("## browser");
-        prompt.AppendLine();
-        prompt.AppendLine("// Tool for browsing.");
-        prompt.AppendLine("// The `cursor` appears in brackets before each browsing display: `[{cursor}]`.");
-        prompt.AppendLine("// Cite information from the tool using the following format:");
-        prompt.AppendLine("// `【{cursor}†L{line_start}(-L{line_end})?】`, for example: `【6†L9-L11】` or `【8†L3】`.");
-        prompt.AppendLine("// Do not quote more than 10 words directly from the tool output.");
-        prompt.AppendLine("// sources=web (default: web)");
-        prompt.AppendLine("namespace browser {");
-        prompt.AppendLine();
-        prompt.AppendLine("// Searches for information related to `query` and displays `topn` results.");
-        prompt.AppendLine("type search = (_: {");
-        prompt.AppendLine("query: string,");
-        prompt.AppendLine("topn?: number, // default: 10");
-        prompt.AppendLine("source?: string,");
-        prompt.AppendLine("}) => any;");
-        prompt.AppendLine();
-        prompt.AppendLine("// Searches for information related to `query` and returns raw JSON data with `topn` results.");
-        prompt.AppendLine("type searchjson = (_: {");
-        prompt.AppendLine("query: string,");
-        prompt.AppendLine("topn?: number, // default: 10");
-        prompt.AppendLine("source?: string,");
-        prompt.AppendLine("}) => any;");
-        prompt.AppendLine();
-        prompt.AppendLine("// Opens the link `id` from the page indicated by `cursor` starting at line number `loc`, showing `num_lines` lines.");
-        prompt.AppendLine("// Valid link ids are displayed with the formatting: `【{id}†.*】`.");
-        prompt.AppendLine("// If `cursor` is not provided, the most recent page is implied.");
-        prompt.AppendLine("// If `id` is a string, it is treated as a fully qualified URL associated with `source`.");
-        prompt.AppendLine("// If `loc` is not provided, the viewport will be positioned at the beginning of the document or centered on the most relevant passage, if available.");
-        prompt.AppendLine("// Use this function without `id` to scroll to a new location of an opened page.");
-        prompt.AppendLine("type open = (_: {");
-        prompt.AppendLine("id?: number | string, // default: -1");
-        prompt.AppendLine("cursor?: number, // default: -1");
-        prompt.AppendLine("loc?: number, // default: -1");
-        prompt.AppendLine("num_lines?: number, // default: -1");
-        prompt.AppendLine("view_source?: boolean, // default: false");
-        prompt.AppendLine("source?: string,");
-        prompt.AppendLine("}) => any;");
-        prompt.AppendLine();
-        prompt.AppendLine("// Opens the link `id` from the page indicated by `cursor` starting at line number `loc`, showing `num_lines` lines, and returns structured JSON data.");
-        prompt.AppendLine("// Valid link ids are displayed with the formatting: `【{id}†.*】`.");
-        prompt.AppendLine("// If `cursor` is not provided, the most recent page is implied.");
-        prompt.AppendLine("// If `id` is a string, it is treated as a fully qualified URL associated with `source`.");
-        prompt.AppendLine("// If `loc` is not provided, the viewport will be positioned at the beginning of the document or centered on the most relevant passage, if available.");
-        prompt.AppendLine("// Use this function without `id` to scroll to a new location of an opened page.");
-        prompt.AppendLine("type openjson = (_: {");
-        prompt.AppendLine("id?: number | string, // default: -1");
-        prompt.AppendLine("cursor?: number, // default: -1");
-        prompt.AppendLine("loc?: number, // default: -1");
-        prompt.AppendLine("num_lines?: number, // default: -1");
-        prompt.AppendLine("view_source?: boolean, // default: false");
-        prompt.AppendLine("source?: string,");
-        prompt.AppendLine("}) => any;");
-        prompt.AppendLine();
-        prompt.AppendLine("// Finds exact matches of `pattern` in the current page, or the page given by `cursor`.");
-        prompt.AppendLine("type find = (_: {");
-        prompt.AppendLine("pattern: string,");
-        prompt.AppendLine("cursor?: number, // default: -1");
-        prompt.AppendLine("}) => any;");
-        prompt.AppendLine();
-        prompt.AppendLine("} // namespace browser");
-        prompt.AppendLine();
-        
-        prompt.AppendLine("# Valid channels: analysis, commentary, final. Channel must be included for every message.");
-        prompt.AppendLine();
-        prompt.AppendLine("IMPORTANT FORMAT RULES:");
-        prompt.AppendLine("- Browser tool calls MUST use the analysis channel");
-        prompt.AppendLine("- Use this EXACT format for browser calls:");
-        prompt.AppendLine("  <|channel|>analysis to=browser.search<|constrain|>json<|message|>{\"query\":\"search terms\",\"topn\":10,\"source\":\"web\"}");
-        prompt.AppendLine("  <|channel|>analysis to=browser.searchjson<|constrain|>json<|message|>{\"query\":\"search terms\",\"topn\":10,\"source\":\"web\"}");
-        prompt.AppendLine("  <|channel|>analysis to=browser.open<|constrain|>json<|message|>{\"id\":1,\"cursor\":1}");
-        prompt.AppendLine("  <|channel|>analysis to=browser.openjson<|constrain|>json<|message|>{\"id\":1,\"cursor\":1}");
-        prompt.AppendLine("  <|channel|>analysis to=browser.find<|constrain|>json<|message|>{\"pattern\":\"search pattern\"}");
-        prompt.AppendLine("- Always end with proper channel for final response:");
-        prompt.AppendLine("  <|channel|>final<|message|>Your response to the user");
-        
-        if (hasFunctions)
+        // Convert to Harmony conversation format
+        var conversation = ConvertToHarmonyConversation(messages, hasFunctions, reasoningEffort, tools, responseFormat);
+
+        // Format the conversation into Harmony format string
+        var formattedPrompt = FormatHarmonyConversation(conversation);
+
+        return formattedPrompt;
+    }
+
+    /// <summary>
+    /// Formats a list of HarmonyMessage objects into the proper Harmony format string
+    /// </summary>
+    private string FormatHarmonyConversation(List<HarmonyMessage> conversation)
+    {
+        var result = new StringBuilder();
+        var config = new HarmonyMessageRenderConfig();
+        config.AutoDropAnalysis = false;
+
+        conversation.RenderForCompletionInto(HarmonyRole.Assistant, result, config);
+
+        return result.ToString();
+    }
+
+    /// <summary>
+    /// Converts SharpAI messages to Harmony conversation format
+    /// </summary>
+    private List<HarmonyMessage> ConvertToHarmonyConversation(List<ChatMessage> messages, bool hasFunctions, ReasoningEffortLevel reasoningEffort, List<ToolDefinition>? tools, ResponseFormat? responseFormat)
+    {
+        var harmonyMessages = new List<HarmonyMessage>();
+
+        // Add system message with proper configuration
+        var systemContent = CreateSystemContent(reasoningEffort, hasFunctions, tools);
+
+        var systemMessage = new HarmonyMessage
         {
-            _logger.LogDebug("Adding function call instructions to prompt");
-            prompt.AppendLine("- Function calls must go to the commentary channel with format:");
-            prompt.AppendLine("  <|channel|>commentary to=functions.function_name<|message|>{\"param\":\"value\"}");
-        }
-        
-        prompt.AppendLine("<|end|>");
+            Role = HarmonyRole.System,
+            Content = new List<HarmonyMessageContent> { systemContent }
+        };
 
-        // Create developer message with instructions and tools
-        var systemMessages = messages.Where(m => m.Role == ChatRole.System).ToList();
-        var instructions = systemMessages.Any() ? 
-            string.Join("\n\n", systemMessages.Select(m => m.Content?.ToString())) : 
-            "You are a helpful assistant.";
-
-        prompt.AppendLine($"<|start|>developer<|message|># Instructions");
-        prompt.AppendLine();
-        prompt.AppendLine(instructions);
-
-        // Add tools definition if functions are available
-        if (hasFunctions && tools?.Any() == true)
+        if(messages.Any(m => m.Role == ChatRole.System && !string.IsNullOrEmpty(m.Content?.ToString())) || (tools != null && tools.Any()) || responseFormat != null)
         {
-            _logger.LogDebug("Adding {ToolCount} tool definitions to prompt", tools.Count);
-            prompt.AppendLine();
-            prompt.AppendLine(CreateToolsDefinition(tools));
+            // If the first message is a system message, include its content as well
+            systemMessage.Content.Add(CreateDeveloperContent(tools, messages.First(m => m.Role == ChatRole.System), responseFormat));
         }
 
-        // Add response format definition if specified
-        if (responseFormat != null)
+        harmonyMessages.Add(systemMessage);
+
+        foreach (var message in messages)
         {
-            _logger.LogDebug("Adding response format definition: {FormatType}", responseFormat.Type);
-            prompt.AppendLine();
-            prompt.AppendLine(CreateResponseFormatDefinition(responseFormat));
-        }
-
-        prompt.AppendLine("<|end|>");
-
-        // Add conversation messages (excluding system messages as they're in developer section)
-        var conversationMessages = messages.Where(m => m.Role != ChatRole.System).ToList();
-        _logger.LogDebug("Processing {ConversationMessageCount} conversation messages", conversationMessages.Count);
-        
-        for (int i = 0; i < conversationMessages.Count; i++)
-        {
-            var message = conversationMessages[i];
-
-            var role = message.Role switch
+            // Skip system messages since we handle them specially
+            if (message.Role == ChatRole.System)
             {
-                ChatRole.User => "user",
-                ChatRole.Assistant => "assistant",
-                ChatRole.Tool => GetToolName(message),
-                _ => "user"
-            };
+                continue;
+            }
 
-            var content = message.Content?.ToString() ?? "";
+            if (message.Role == ChatRole.Assistant && message.ToolCalls != null && message.ToolCalls.Any())
+            {
+                // Tool call messages are handled within the content types
+                foreach (var toolCall in message.ToolCalls ?? [])
+                {
+                    harmonyMessages.Add(new HarmonyMessage
+                    {
+                        Role = HarmonyRole.Tool,
+                        Content = new List<HarmonyMessageContent>
+                        {
+                            new HarmonyAssistantContent
+                            {
+                                Channel = HarmonyChannel.Commentary,
+                                ToolCall = new HarmonyToolCall
+                                {
+                                    ToolName = toolCall.Function.Name,
+                                    Namespace = toolCall.Function.Namespace,
+                                    Arguments = toolCall.Function.Arguments
+                                }
+                            }
+                        },
+                    });
+                }
+                continue; 
+            }
             
             if (message.Role == ChatRole.Tool)
             {
-                // Tool messages have special format: <|start|>toolname to=assistant<|channel|>commentary<|message|>content<|end|>
-                prompt.AppendLine($"<|start|>{role} to=assistant<|channel|>commentary<|message|>{content}<|end|>");
-            }
-            else if (!string.IsNullOrEmpty(content))
-            {
-                prompt.AppendLine($"<|start|>{role}<|message|>{content}<|end|>");
-            }
-        }
-
-        // Start assistant response
-        prompt.Append("<|start|>assistant");
-
-        _logger.LogInformation("Completed prompt formatting with {TotalLength} characters", prompt.Length);
-        return prompt.ToString();
-    }
-
-    /// <summary>
-    /// Creates TypeScript-style tool definitions for function calling.
-    /// </summary>
-    /// <param name="tools">List of tool definitions to format</param>
-    /// <returns>Formatted tools definition string</returns>
-    private string CreateToolsDefinition(List<ToolDefinition> tools)
-    {
-        var toolsBuilder = new StringBuilder();
-        toolsBuilder.AppendLine("# Tools");
-        toolsBuilder.AppendLine();
-        toolsBuilder.AppendLine("## functions");
-        toolsBuilder.AppendLine();
-        toolsBuilder.AppendLine("namespace functions {");
-        toolsBuilder.AppendLine();
-
-        foreach (var tool in tools)
-        {
-            if (tool.Function != null)
-            {
-                // Add description as comment
-                if (!string.IsNullOrEmpty(tool.Function.Description))
+                // Tool result messages are handled within the content types
+                if (message.Name == null)
                 {
-                    toolsBuilder.AppendLine($"// {tool.Function.Description}");
-                }
-
-                // Convert parameters to TypeScript-like syntax
-                var parametersDefinition = ConvertParametersToTypeScript(tool.Function.Parameters);
-                
-                if (string.IsNullOrEmpty(parametersDefinition))
-                {
-                    toolsBuilder.AppendLine($"type {tool.Function.Name} = () => any;");
-                }
-                else
-                {
-                    toolsBuilder.AppendLine($"type {tool.Function.Name} = (_: {parametersDefinition}) => any;");
-                }
-                
-                toolsBuilder.AppendLine();
-            }
-        }
-
-        toolsBuilder.AppendLine("} // namespace functions");
-        return toolsBuilder.ToString();
-    }
-
-    /// <summary>
-    /// Converts function parameters from JSON schema format to TypeScript-like syntax.
-    /// </summary>
-    /// <param name="parameters">Function parameters to convert</param>
-    /// <returns>TypeScript-style parameter definition</returns>
-    private string ConvertParametersToTypeScript(FunctionParameters? parameters)
-    {
-        if (parameters == null) return "";
-
-        try
-        {
-            var tsBuilder = new StringBuilder();
-            tsBuilder.Append("{\n");
-            
-            var props = new List<string>();
-            
-            if (parameters.Properties != null)
-            {
-                foreach (var (propName, propSchema) in parameters.Properties)
-                {
-                    var tsType = ConvertTypeToTypeScript(propSchema);
-                    var isRequired = parameters.Required?.Contains(propName) == true;
-                    var isOptional = !isRequired;
-
-                    var propDeclaration = isOptional ? $"{propName}?" : propName;
-                    
-                    if (!string.IsNullOrEmpty(propSchema.Description))
+                    _logger.LogDebug("Tool message missing Name property, taking from matching ToolCall with id {ToolCallId}.", message.ToolCallId);
+                    var matchingToolCall = messages.Where(m => m.ToolCalls != null).SelectMany(m => m.ToolCalls).FirstOrDefault(tc => tc.CallId == message.ToolCallId);
+                    if (matchingToolCall != null)
                     {
-                        // Handle multi-line type definitions (for nested objects)
-                        if (tsType.Contains('\n'))
-                        {
-                            // Indent the nested object properly
-                            var indentedType = string.Join("\n", tsType.Split('\n').Select(line => 
-                                string.IsNullOrWhiteSpace(line) ? line : $"  {line}"));
-                            props.Add($"// {propSchema.Description}\n{propDeclaration}: {indentedType}");
-                        }
-                        else
-                        {
-                            props.Add($"// {propSchema.Description}\n{propDeclaration}: {tsType}");
-                        }
+                        message.Name = matchingToolCall.Function.Name;
                     }
                     else
                     {
-                        // Handle multi-line type definitions (for nested objects)
-                        if (tsType.Contains('\n'))
-                        {
-                            var indentedType = string.Join("\n", tsType.Split('\n').Select(line => 
-                                string.IsNullOrWhiteSpace(line) ? line : $"  {line}"));
-                            props.Add($"{propDeclaration}: {indentedType}");
-                        }
-                        else
-                        {
-                            props.Add($"{propDeclaration}: {tsType}");
-                        }
+                        _logger.LogWarning("No matching ToolCall found for tool message with id {ToolCallId}. tool name will be \"unknown_tool\"", message.ToolCallId);
                     }
                 }
-            }
-            
-            if (props.Count > 0)
-            {
-                tsBuilder.Append(string.Join(",\n", props));
-            }
-            
-            tsBuilder.Append("\n}");
-            return tsBuilder.ToString();
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(ex, "Failed to convert parameters to TypeScript format");
-        }
-
-        return "";
-    }
-
-    /// <summary>
-    /// Converts a property schema to TypeScript type syntax.
-    /// </summary>
-    /// <param name="schema">Property schema to convert</param>
-    /// <returns>TypeScript type definition</returns>
-    private string ConvertTypeToTypeScript(PropertySchema schema)
-    {
-        if (schema.Enum != null && schema.Enum.Count > 0)
-        {
-            var enumValues = schema.Enum.Select(e => $"\"{e}\"").ToArray();
-            return string.Join(" | ", enumValues);
-        }
-
-        if (schema.Type is string typeString)
-        {
-            return typeString switch
-            {
-                "string" => "string",
-                "number" => "number", 
-                "integer" => "number",
-                "boolean" => "boolean",
-                "array" => schema.Items != null ? $"{ConvertTypeToTypeScript(schema.Items)}[]" : "any[]",
-                "object" => ConvertNestedObjectToTypeScript(schema),
-                _ => "any"
-            };
-        }
-        
-        // Handle union types like ["string", "null"]
-        if (schema.Type is System.Text.Json.JsonElement jsonElement && jsonElement.ValueKind == System.Text.Json.JsonValueKind.Array)
-        {
-            var types = new List<string>();
-            foreach (var typeElement in jsonElement.EnumerateArray())
-            {
-                var typeStr = typeElement.GetString();
-                if (typeStr == "null")
+                harmonyMessages.Add(new HarmonyMessage
                 {
-                    continue; // Handle null in optional parameters
-                }
-                types.Add(typeStr switch
-                {
-                    "string" => "string",
-                    "number" => "number",
-                    "integer" => "number", 
-                    "boolean" => "boolean",
-                    "object" => ConvertNestedObjectToTypeScript(schema),
-                    _ => "any"
+                    Role = HarmonyRole.Tool,
+                    Content = new List<HarmonyMessageContent>
+                    {
+                        new HarmonyToolResultContent
+                        {
+                            ToolCall = new HarmonyToolCall
+                            {
+                                ToolName = message.Name ?? "unknown_tool",
+                                Arguments = message.Content?.ToString() ?? "{}"
+                            },
+                            Content = message.Content?.ToString() ?? string.Empty
+                        }
+                    },
                 });
+                continue; 
             }
-            return types.Count > 0 ? string.Join(" | ", types) : "any";
+
+            var role = ConvertRole(message.Role);
+            var content = new List<HarmonyMessageContent>();
+
+            // Add text content
+            var contentText = message.Content?.ToString();
+            if (!string.IsNullOrEmpty(contentText))
+            {
+                content.Add(new HarmonyTextContent(contentText));
+            }
+
+            // Add tool calls if present (these will be handled by the Harmony library)
+            if (message.ToolCalls?.Any() == true)
+            {
+                foreach (var toolCall in message.ToolCalls)
+                {
+                    // The Harmony library should handle tool call formatting
+                    var toolContent = new HarmonyTextContent($"Function call: {toolCall.Function.Name}({toolCall.Function.Arguments})");
+                    content.Add(toolContent);
+                }
+            }
+
+            var harmonyMessage = new HarmonyMessage
+            {
+                Role = role,
+                Content = content
+            };
+
+            // Note: Channel and Recipient are now handled within content types, not at message level
+            // Tool results would be handled through specific content types if needed
+
+            harmonyMessages.Add(harmonyMessage);
         }
 
-        return "any";
+        return new List<HarmonyMessage>(harmonyMessages);
     }
 
     /// <summary>
-    /// Converts nested object schemas to TypeScript interface syntax.
+    /// Creates a system message with appropriate configuration for the Harmony library
     /// </summary>
-    /// <param name="schema">Property schema containing nested object definition</param>
-    /// <returns>TypeScript interface definition</returns>
-    private string ConvertNestedObjectToTypeScript(PropertySchema schema)
+    private HarmonySystemContent CreateSystemContent(ReasoningEffortLevel reasoningEffort, bool hasFunctions, List<ToolDefinition>? tools)
     {
-        if (schema.Properties == null || !schema.Properties.Any())
+        var systemContent = HarmonySystemContent.New()
+            .WithConversationStartDate(DateTime.Now.ToString("yyyy-MM-dd"))
+            .WithReasoningEffort(ConvertReasoningEffort(reasoningEffort));
+
+        // Add browser tools by default
+        systemContent = systemContent.WithBrowserTool();
+
+        // Add function tools if provided
+        if (hasFunctions && tools?.Any() == true)
         {
-            return "any";
+            var functionTools = tools.Select(tool => HarmonyToolDescription.New(
+                tool.Function.Name,
+                tool.Function.Description ?? "",
+                ConvertParametersToDict(tool.Function.Parameters)
+            )).ToArray();
+
+            var functionNamespace = new HarmonyToolNamespaceConfig("functions", "Function calling tools", functionTools);
+            systemContent = systemContent.WithTools(functionNamespace);
         }
 
-        var nestedBuilder = new StringBuilder();
-        nestedBuilder.Append("{\n");
-        
-        var nestedProps = new List<string>();
-        
-        foreach (var (propName, propSchema) in schema.Properties)
-        {
-            var tsType = ConvertTypeToTypeScript(propSchema);
-            var isRequired = schema.Required?.Contains(propName) == true;
-            var isOptional = !isRequired;
-
-            var propDeclaration = isOptional ? $"  {propName}?" : $"  {propName}";
-            
-            if (!string.IsNullOrEmpty(propSchema.Description))
-            {
-                nestedProps.Add($"  // {propSchema.Description}\n  {propDeclaration}: {tsType}");
-            }
-            else
-            {
-                nestedProps.Add($"  {propDeclaration}: {tsType}");
-            }
-        }
-        
-        if (nestedProps.Count > 0)
-        {
-            nestedBuilder.Append(string.Join(",\n", nestedProps));
-        }
-        
-        nestedBuilder.Append("\n}");
-        return nestedBuilder.ToString();
+        return systemContent;
     }
 
     /// <summary>
-    /// Creates response format definition for structured output requirements.
+    /// Creates developer content with tool definitions and configuration
     /// </summary>
-    /// <param name="responseFormat">Response format specification</param>
-    /// <returns>Formatted response format definition</returns>
-    private string CreateResponseFormatDefinition(ResponseFormat responseFormat)
+    private HarmonyDeveloperContent CreateDeveloperContent(List<ToolDefinition>? tools, ChatMessage systemMessage, ResponseFormat? responseFormat)
     {
-        var formatBuilder = new StringBuilder();
-        formatBuilder.AppendLine("# Response Formats");
-        formatBuilder.AppendLine();
+        var developerContent = HarmonyDeveloperContent.New().WithInstructions(systemMessage.Content?.ToString() ?? "");
 
-        if (responseFormat.Type == ResponseFormatType.JsonSchema && responseFormat.JsonSchema != null)
+        // Add tools if provided
+        if (tools?.Any() == true)
         {
-            var schema = responseFormat.JsonSchema;
-            formatBuilder.AppendLine($"## {schema.Name}");
-            formatBuilder.AppendLine();
+            var harmonyTools = tools.Select(tool => HarmonyToolDescription.New(
+                tool.Function.Name,
+                tool.Function.Description ?? "",
+                ConvertParametersToDict(tool.Function.Parameters)
+            )).ToArray();
 
-            // Add description if available
-            if (!string.IsNullOrEmpty(schema.Description))
-            {
-                formatBuilder.AppendLine($"// {schema.Description}");
-            }
-
-            // Convert schema to JSON string
-            var schemaJson = ConvertSchemaToJson(schema.Schema);
-            formatBuilder.AppendLine(schemaJson);
-        }
-        else if (responseFormat.Type == ResponseFormatType.JsonObject)
-        {
-            formatBuilder.AppendLine("## json_object");
-            formatBuilder.AppendLine();
-            formatBuilder.AppendLine("// Response must be a valid JSON object");
-            formatBuilder.AppendLine("{\"type\":\"object\"}");
+            var toolNamespace = new HarmonyToolNamespaceConfig("functions", "Available functions", harmonyTools);
+            developerContent = developerContent.WithTools(toolNamespace);
         }
 
-        return formatBuilder.ToString();
+        // Add response format constraint if specified
+        if (responseFormat != null)
+        {
+        }
+
+        return developerContent;
+    }
+
+    
+
+
+    /// <summary>
+    /// Converts SharpAI reasoning effort to Harmony reasoning effort
+    /// </summary>
+    private HarmonyReasoningEffort ConvertReasoningEffort(ReasoningEffortLevel level)
+    {
+        return level switch
+        {
+            ReasoningEffortLevel.Low => HarmonyReasoningEffort.Low,
+            ReasoningEffortLevel.Medium => HarmonyReasoningEffort.Medium,
+            ReasoningEffortLevel.High => HarmonyReasoningEffort.High,
+            _ => HarmonyReasoningEffort.Medium
+        };
     }
 
     /// <summary>
-    /// Converts schema objects to JSON string representation.
+    /// Converts function parameters to dictionary format for Harmony library
     /// </summary>
-    /// <param name="schema">Schema object to convert</param>
-    /// <returns>JSON string representation of the schema</returns>
-    private string ConvertSchemaToJson(object? schema)
+    private Dictionary<string, object>? ConvertParametersToDict(FunctionParameters? parameters)
     {
-        if (schema == null)
-        {
-            return "{\"type\":\"object\"}";
-        }
+        if (parameters?.Properties == null)
+            return null;
 
-        try
+        var result = new Dictionary<string, object>
         {
-            // If it's already a JSON string, return as-is
-            if (schema is string jsonString)
-            {
-                return jsonString;
-            }
-
-            // If it's a FunctionParameters object, convert it properly
-            if (schema is FunctionParameters functionParams)
-            {
-                return ConvertFunctionParametersToJsonSchema(functionParams);
-            }
-
-            // Otherwise, serialize it to JSON
-            return System.Text.Json.JsonSerializer.Serialize(schema, new System.Text.Json.JsonSerializerOptions
-            {
-                WriteIndented = false
-            });
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(ex, "Failed to convert schema to JSON");
-            return "{\"type\":\"object\"}";
-        }
-    }
-
-    /// <summary>
-    /// Converts function parameters to JSON schema format.
-    /// </summary>
-    /// <param name="parameters">Function parameters to convert</param>
-    /// <returns>JSON schema string</returns>
-    private string ConvertFunctionParametersToJsonSchema(FunctionParameters parameters)
-    {
-        var schema = new Dictionary<string, object>
-        {
-            ["type"] = parameters.Type
+            ["type"] = "object",
+            ["properties"] = new Dictionary<string, object>()
         };
 
-        if (parameters.Properties != null && parameters.Properties.Any())
+        var properties = new Dictionary<string, object>();
+        foreach (var prop in parameters.Properties)
         {
-            var properties = new Dictionary<string, object>();
-            foreach (var (key, value) in parameters.Properties)
-            {
-                properties[key] = ConvertPropertySchemaToJson(value);
-            }
-            schema["properties"] = properties;
+            properties[prop.Key] = ConvertPropertyToDict(prop.Value);
+        }
+        result["properties"] = properties;
+
+        if (parameters.Required?.Any() == true)
+        {
+            result["required"] = parameters.Required;
         }
 
-        if (parameters.Required != null && parameters.Required.Any())
-        {
-            schema["required"] = parameters.Required;
-        }
-
-        schema["additionalProperties"] = parameters.AdditionalProperties;
-
-        if (!string.IsNullOrEmpty(parameters.Description))
-        {
-            schema["description"] = parameters.Description;
-        }
-
-        return System.Text.Json.JsonSerializer.Serialize(schema, new System.Text.Json.JsonSerializerOptions
-        {
-            WriteIndented = false
-        });
+        return result;
     }
 
     /// <summary>
-    /// Converts a property schema to JSON representation.
+    /// Converts property schema to dictionary format
     /// </summary>
-    /// <param name="propertySchema">Property schema to convert</param>
-    /// <returns>JSON object representation of the property schema</returns>
-    private object ConvertPropertySchemaToJson(PropertySchema propertySchema)
+    private Dictionary<string, object> ConvertPropertyToDict(PropertySchema schema)
     {
-        var property = new Dictionary<string, object>();
+        var result = new Dictionary<string, object>();
 
-        if (propertySchema.Type != null)
-        {
-            property["type"] = propertySchema.Type;
-        }
+        if (schema.Type != null)
+            result["type"] = schema.Type;
 
-        if (!string.IsNullOrEmpty(propertySchema.Description))
-        {
-            property["description"] = propertySchema.Description;
-        }
+        if (!string.IsNullOrEmpty(schema.Description))
+            result["description"] = schema.Description;
 
-        if (propertySchema.Enum != null && propertySchema.Enum.Any())
-        {
-            property["enum"] = propertySchema.Enum;
-        }
+        if (schema.Enum?.Any() == true)
+            result["enum"] = schema.Enum;
 
-        if (propertySchema.Items != null)
-        {
-            property["items"] = ConvertPropertySchemaToJson(propertySchema.Items);
-        }
-
-        if (propertySchema.Properties != null && propertySchema.Properties.Any())
-        {
-            var nestedProperties = new Dictionary<string, object>();
-            foreach (var (key, value) in propertySchema.Properties)
-            {
-                nestedProperties[key] = ConvertPropertySchemaToJson(value);
-            }
-            property["properties"] = nestedProperties;
-
-            if (propertySchema.Required != null && propertySchema.Required.Any())
-            {
-                property["required"] = propertySchema.Required;
-            }
-
-            if (propertySchema.AdditionalProperties.HasValue)
-            {
-                property["additionalProperties"] = propertySchema.AdditionalProperties.Value;
-            }
-        }
-
-        if (propertySchema.Default != null)
-        {
-            property["default"] = propertySchema.Default;
-        }
-
-        if (propertySchema.Minimum.HasValue)
-        {
-            property["minimum"] = propertySchema.Minimum.Value;
-        }
-
-        if (propertySchema.Maximum.HasValue)
-        {
-            property["maximum"] = propertySchema.Maximum.Value;
-        }
-
-        if (propertySchema.MinLength.HasValue)
-        {
-            property["minLength"] = propertySchema.MinLength.Value;
-        }
-
-        if (propertySchema.MaxLength.HasValue)
-        {
-            property["maxLength"] = propertySchema.MaxLength.Value;
-        }
-
-        if (!string.IsNullOrEmpty(propertySchema.Pattern))
-        {
-            property["pattern"] = propertySchema.Pattern;
-        }
-
-        if (!string.IsNullOrEmpty(propertySchema.Format))
-        {
-            property["format"] = propertySchema.Format;
-        }
-
-        return property;
+        return result;
     }
 
     /// <summary>
-    /// Extracts the tool name from a chat message for proper formatting.
+    /// Converts SharpAI role to Harmony role
     /// </summary>
-    /// <param name="message">Chat message containing tool information</param>
-    /// <returns>Tool name for formatting</returns>
-    private string GetToolName(ChatMessage message)
+    private HarmonyRole ConvertRole(ChatRole role)
     {
-        // Extract tool name from message context
-        if (!string.IsNullOrEmpty(message.Name))
+        return role switch
         {
-            // For browser tools, use the recipient name directly (e.g., "browser.search")
-            if (message.Name.StartsWith("browser.", StringComparison.OrdinalIgnoreCase))
-            {
-                return message.Name;
-            }
-            // For other function tools, use the name as is
-            return message.Name;
-        }
-        
-        // Fallback for when no name is provided
-        return "functions.tool_result";
+            ChatRole.System => HarmonyRole.System,
+            ChatRole.User => HarmonyRole.User,
+            ChatRole.Assistant => HarmonyRole.Assistant,
+            ChatRole.Tool => HarmonyRole.Tool,
+            _ => HarmonyRole.User
+        };
+    }
+
+    /// <summary>
+    /// Dispose of resources
+    /// </summary>
+    public void Dispose()
+    {
+        // No unmanaged resources to dispose
     }
 }

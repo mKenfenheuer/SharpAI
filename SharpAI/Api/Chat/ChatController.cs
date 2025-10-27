@@ -31,15 +31,7 @@ namespace SharpAI.Api.Chat
                     return BadRequest(new { error = new { message = "Messages cannot be empty", type = "invalid_request_error" } });
                 }
 
-                // Check if streaming is requested
-                if (request.Stream == true)
-                {
-                    return await HandleStreamingResponse(request);
-                }
-                else
-                {
-                    return await HandleNonStreamingResponse(request);
-                }
+                return await HandleNonStreamingResponse(request);
             }
             catch (Exception ex)
             {
@@ -48,51 +40,10 @@ namespace SharpAI.Api.Chat
             }
         }
 
-        [HttpPost("test-request")]
-        public IActionResult TestRequest([FromBody] ChatCompletionRequest request)
-        {
-            return Ok(new
-            {
-                receivedRequest = new
-                {
-                    model = request.Model,
-                    messageCount = request.Messages?.Count ?? 0,
-                    firstMessageRole = request.Messages?.FirstOrDefault()?.Role.ToString(),
-                    responseFormatType = request.ResponseFormat?.Type.ToString(),
-                    stream = request.Stream,
-                    temperature = request.Temperature
-                }
-            });
-        }
-
         private async Task<IActionResult> HandleNonStreamingResponse(ChatCompletionRequest request)
         {
             var response = await _llamaService.GenerateChatCompletionAsync(request);
             return Ok(response);
-        }
-
-        private async Task<IActionResult> HandleStreamingResponse(ChatCompletionRequest request)
-        {
-            Response.Headers["Content-Type"] = "text/event-stream";
-            Response.Headers["Cache-Control"] = "no-cache";
-            Response.Headers["Connection"] = "keep-alive";
-
-            await foreach (var chunk in _llamaService.GenerateChatCompletionStreamAsync(request))
-            {
-                var json = JsonSerializer.Serialize(chunk, new JsonSerializerOptions 
-                { 
-                    PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower,
-                    DefaultIgnoreCondition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull
-                });
-                
-                await Response.WriteAsync($"data: {json}\n\n");
-                await Response.Body.FlushAsync();
-            }
-
-            await Response.WriteAsync("data: [DONE]\n\n");
-            await Response.Body.FlushAsync();
-
-            return new EmptyResult();
         }
     }
 }

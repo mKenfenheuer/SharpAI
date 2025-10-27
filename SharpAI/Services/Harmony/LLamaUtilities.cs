@@ -59,18 +59,15 @@ public static class LLamaUtilities
         foreach (var harmonyCall in harmonyToolCalls)
         {
             // Generate proper call ID according to OpenAI format
-            var callId = !string.IsNullOrEmpty(harmonyCall.Id) 
-                ? harmonyCall.Id 
-                : $"call_{Guid.NewGuid():N}";
+            var callId = $"call_{Guid.NewGuid():N}";
 
             var toolCall = new ToolCall
             {
-                Id = callId,
                 CallId = callId, // For streaming compatibility
                 Type = ToolType.Function,
                 Function = new FunctionCall
                 {
-                    Name = harmonyCall.Name,
+                    Name = harmonyCall.ToolName,
                     Arguments = !string.IsNullOrEmpty(harmonyCall.Arguments) 
                         ? harmonyCall.Arguments 
                         : "{}"
@@ -162,7 +159,7 @@ public static class LLamaUtilities
         var inferenceParams = new InferenceParams
         {
             MaxTokens = request.MaxTokens ?? int.MaxValue,
-            AntiPrompts = antiPrompts,
+            AntiPrompts = new List<string>(antiPrompts),
             SamplingPipeline = samplingPipeline,
             DecodeSpecialTokens = true
         };

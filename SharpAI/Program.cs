@@ -34,9 +34,9 @@ public class Program
         builder.Services.AddSingleton<SharpAI.Services.WhisperModelManager>();
         
         // Register harmony services
-        builder.Services.AddSingleton<SharpAI.Services.Harmony.HarmonyFormatter>();
-        builder.Services.AddSingleton<SharpAI.Services.Harmony.HarmonyParser>();
-        builder.Services.AddSingleton<SharpAI.Services.Harmony.StreamingInferenceEngine>();
+        builder.Services.AddScoped<SharpAI.Services.Harmony.HarmonyFormatter>();
+        builder.Services.AddScoped<SharpAI.Services.Harmony.StreamingInferenceEngine>();
+        builder.Services.AddScoped<SharpAI.Services.Harmony.HarmonyParser>();
         
         // Register browser services
         builder.Services.AddSingleton<SharpAI.Services.Browser.BrowserService>();
