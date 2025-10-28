@@ -290,6 +290,48 @@ public class HarmonyResponse
 
         return content.ToString().Trim();
     }
+
+    /// <summary>
+    /// Extracts commentary content from harmony response messages
+    /// </summary>
+    public string ExtractCommentaryContent()
+    {
+        var content = new StringBuilder();
+
+        // Extract content from commentary channel if available
+        var channels = Messages.Where(m => m.Role == HarmonyRole.Assistant)
+            .SelectMany(m => m.Content.OfType<HarmonyAssistantContent>());
+
+        var commentaryChannel = channels.FirstOrDefault(c => c.Channel == HarmonyChannel.Commentary);
+
+        if (commentaryChannel != null)
+        {
+            content.Append(commentaryChannel.Content);
+        }
+
+        return content.ToString().Trim();
+    }
+}
+
+/// <summary>
+/// Represents a delta (partial update) in harmony format responses for streaming.
+/// Contains incremental updates for different channels during parsing.
+/// </summary>
+public class HarmonyDelta
+{
+    public HarmonyRole? Role { get; set; }
+    public HarmonyChannel? Channel { get; set; }
+    public string? Content { get; set; }
+    public string? FinalContent { get; set; }
+    public string? ReasoningContent { get; set; }
+    public string? CommentaryContent { get; set; }
+    public HarmonyToolCall? ToolCall { get; set; }
+    public bool IsComplete { get; set; }
+    public bool HasNewContent => !string.IsNullOrEmpty(Content) || 
+                                !string.IsNullOrEmpty(FinalContent) || 
+                                !string.IsNullOrEmpty(ReasoningContent) || 
+                                !string.IsNullOrEmpty(CommentaryContent) ||
+                                ToolCall != null;
 }
 
 

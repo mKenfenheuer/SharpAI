@@ -418,6 +418,93 @@ public static class LLamaUtilities
     }
 
     /// <summary>
+    /// Creates a streaming chat completion response from HarmonyDelta for real-time streaming.
+    /// </summary>
+    /// <param name="delta">Harmony delta containing incremental updates</param>
+    /// <param name="promptMessages">Original prompt messages</param>
+    /// <param name="request">Chat completion request</param>
+    /// <param name="finishReason">Finish reason for the chunk (null for intermediate chunks)</param>
+    /// <param name="isFirstChunk">Whether this is the first chunk in the stream</param>
+    /// <returns>Streaming chat completion response with delta structure</returns>
+    public static ChatCompletionStreamingResponse CreateStreamingResponseFromDelta(
+        this HarmonyDelta delta,
+        IEnumerable<ChatMessage> promptMessages,
+        ChatCompletionRequest request,
+        string? finishReason = null,
+        bool isFirstChunk = false)
+    {
+        var responseDelta = new ChatCompletionDelta();
+        var choices = new List<ChatCompletionStreamingChoice>();
+
+        // For first chunk, include the role
+        if (isFirstChunk && delta.Role != null)
+        {
+            responseDelta.Role = delta.Role.Value.ToChatRole();
+        }
+
+        // Map delta content to appropriate fields
+        if (!string.IsNullOrEmpty(delta.FinalContent))
+        {
+            responseDelta.Content = delta.FinalContent;
+        }
+        
+        if (!string.IsNullOrEmpty(delta.ReasoningContent))
+        {
+            responseDelta.Reasoning = delta.ReasoningContent;
+        }
+        
+        if (!string.IsNullOrEmpty(delta.CommentaryContent))
+        {
+            responseDelta.Commentary = delta.CommentaryContent;
+        }
+
+        // Handle tool calls
+        if (delta.ToolCall != null)
+        {
+            responseDelta.ToolCalls = new List<ToolCallDelta>
+            {
+                new ToolCallDelta
+                {
+                    Index = 0,
+                    Id = Guid.NewGuid().ToString(),
+                    Type = "function",
+                    Function = new FunctionCallDelta
+                    {
+                        Name = delta.ToolCall.ToolName,
+                        Arguments = delta.ToolCall.Arguments ?? ""
+                    }
+                }
+            };
+        }
+
+        var choice = new ChatCompletionStreamingChoice
+        {
+            Index = 0,
+            Delta = responseDelta,
+            FinishReason = finishReason
+        };
+
+        choices.Add(choice);
+
+        var response = new ChatCompletionStreamingResponse
+        {
+            Model = request.Model,
+            Id = CreateCompletionId(),
+            Object = CompletionObjectType.ChatCompletionChunk,
+            Created = GetCurrentUnixTimestamp(),
+            Choices = choices,
+            Usage = finishReason != null ? new TokenUsage
+            {
+                PromptTokens = 0, // Can be calculated if needed
+                CompletionTokens = 0, // Can be calculated if needed
+                TotalTokens = 0
+            } : null
+        };
+
+        return response;
+    }
+
+    /// <summary>
     /// Gets the current Unix timestamp for API responses.
     /// </summary>
     /// <returns>Unix timestamp in seconds</returns>

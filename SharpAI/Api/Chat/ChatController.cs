@@ -129,26 +129,16 @@ namespace SharpAI.Api.Chat
             {
                 bool isFirstChunk = true;
                 string? streamId = null;
-                var channelTracking = new Dictionary<string, string>
-                {
-                    ["final"] = "",
-                    ["analysis"] = "",
-                    ["commentary"] = ""
-                };
-                List<ToolCall>? previousToolCalls = null;
 
                 await foreach (var chunk in _llamaService.GenerateChatCompletionAsync(request))
                 {
                     // Use the same ID for all chunks in this stream
                     streamId ??= chunk.Id;
 
-                    // Process all assistant messages from the response
-                    var assistantMessages = chunk.Choices?
-                        .Where(c => c.Message?.Role == ChatRole.Assistant)
-                        .Select(c => c.Message!)
-                        .ToList() ?? new List<ChatMessage>();
-
-                    foreach (var currentMessage in assistantMessages)
+                    // Process the response as a streaming chunk
+                    var assistantChoice = chunk.Choices?.FirstOrDefault(c => c.Message?.Role == ChatRole.Assistant);
+                    
+                    if (assistantChoice?.Message != null)
                     {
                         var delta = new ChatCompletionDelta();
 
@@ -156,134 +146,81 @@ namespace SharpAI.Api.Chat
                         if (isFirstChunk)
                         {
                             delta.Role = ChatRole.Assistant;
+                            isFirstChunk = false;
                         }
 
-                        // Determine the channel based on the message name
-                        var channel = currentMessage.Name?.ToLowerInvariant() ?? "final";
-                        var previousContent = channelTracking.GetValueOrDefault(channel, "");
-
-                        // Handle content deltas based on channel
-                        if (!string.IsNullOrEmpty(currentMessage.Content))
+                        // Map content to delta fields
+                        if (!string.IsNullOrEmpty(assistantChoice.Message.Content))
                         {
-                            if (currentMessage.Content.Length > previousContent.Length)
-                            {
-                                // Send only the new content (delta)
-                                var deltaContent = currentMessage.Content.Substring(previousContent.Length);
-                                
-                                // Map channels to appropriate delta fields
-                                switch (channel)
-                                {
-                                    case "final":
-                                        delta.Content = deltaContent;
-                                        break;
-                                    case "analysis":
-                                        delta.Reasoning = deltaContent;
-                                        break;
-                                    case "commentary":
-                                        delta.Commentary = deltaContent;
-                                        break;
-                                    default:
-                                        delta.Content = deltaContent; // Default to content for unknown channels
-                                        break;
-                                }
-
-                                channelTracking[channel] = currentMessage.Content;
-                            }
+                            delta.Content = assistantChoice.Message.Content;
+                        }
+                        
+                        if (!string.IsNullOrEmpty(assistantChoice.Message.Reasoning))
+                        {
+                            delta.Reasoning = assistantChoice.Message.Reasoning;
+                        }
+                        
+                        if (!string.IsNullOrEmpty(assistantChoice.Message.Commentary))
+                        {
+                            delta.Commentary = assistantChoice.Message.Commentary;
                         }
 
-                        // Handle tool call deltas
-                        if (currentMessage.ToolCalls?.Any() == true)
+                        // Handle tool calls
+                        if (assistantChoice.Message.ToolCalls?.Any() == true)
                         {
                             delta.ToolCalls = new List<ToolCallDelta>();
                             
-                            for (int i = 0; i < currentMessage.ToolCalls.Count; i++)
+                            for (int i = 0; i < assistantChoice.Message.ToolCalls.Count; i++)
                             {
-                                var toolCall = currentMessage.ToolCalls[i];
+                                var toolCall = assistantChoice.Message.ToolCalls[i];
                                 var toolCallDelta = new ToolCallDelta
                                 {
-                                    Index = i
+                                    Index = i,
+                                    Id = toolCall.CallId,
+                                    Type = toolCall.Type.ToString().ToLower()
                                 };
 
-                                // Check if this is a new tool call or an update to an existing one
-                                var previousToolCall = previousToolCalls?.ElementAtOrDefault(i);
-                                
-                                if (previousToolCall == null)
+                                if (toolCall.Function != null)
                                 {
-                                    // This is a new tool call, send all the initial data
-                                    toolCallDelta.Id = toolCall.CallId;
-                                    toolCallDelta.Type = toolCall.Type.ToString().ToLower();
-                                    if (toolCall.Function != null)
+                                    toolCallDelta.Function = new FunctionCallDelta
                                     {
-                                        toolCallDelta.Function = new FunctionCallDelta
-                                        {
-                                            Name = toolCall.Function.Name,
-                                            Arguments = toolCall.Function.Arguments ?? ""
-                                        };
-                                    }
-                                }
-                                else
-                                {
-                                    // This is an update, send only the delta
-                                    var previousArgs = previousToolCall.Function?.Arguments ?? "";
-                                    var currentArgs = toolCall.Function?.Arguments ?? "";
-                                    
-                                    if (currentArgs.Length > previousArgs.Length)
-                                    {
-                                        toolCallDelta.Function = new FunctionCallDelta
-                                        {
-                                            Arguments = currentArgs.Substring(previousArgs.Length)
-                                        };
-                                    }
+                                        Name = toolCall.Function.Name,
+                                        Arguments = toolCall.Function.Arguments
+                                    };
                                 }
 
                                 delta.ToolCalls.Add(toolCallDelta);
                             }
-
-                            // Update previous tool calls
-                            previousToolCalls = currentMessage.ToolCalls.Select(tc => new ToolCall
-                            {
-                                CallId = tc.CallId,
-                                Type = tc.Type,
-                                Function = tc.Function != null ? new FunctionCall
-                                {
-                                    Name = tc.Function.Name,
-                                    Arguments = tc.Function.Arguments
-                                } : null
-                            }).ToList();
                         }
 
-                        // Create the streaming response
-                        var streamingResponse = new ChatCompletionStreamingResponse
-                        {
-                            Id = streamId,
-                            Object = CompletionObjectType.ChatCompletionChunk,
-                            Created = chunk.Created,
-                            Model = chunk.Model,
-                            Choices = new List<ChatCompletionStreamingChoice>
-                            {
-                                new ChatCompletionStreamingChoice
-                                {
-                                    Index = 0,
-                                    Delta = delta,
-                                    FinishReason = chunk.Choices?.FirstOrDefault()?.FinishReason
-                                }
-                            },
-                            Usage = chunk.Usage
-                        };
-
-                        // Only send chunk if there's actual content to stream
+                        // Create the streaming response only if there's actual content
                         if (!string.IsNullOrEmpty(delta.Content) || 
                             !string.IsNullOrEmpty(delta.Reasoning) ||
                             !string.IsNullOrEmpty(delta.Commentary) ||
-                            delta.ToolCalls?.Any() == true || 
-                            isFirstChunk)
+                            delta.ToolCalls?.Any() == true)
                         {
+                            var streamingResponse = new ChatCompletionStreamingResponse
+                            {
+                                Id = streamId,
+                                Object = CompletionObjectType.ChatCompletionChunk,
+                                Created = chunk.Created,
+                                Model = chunk.Model,
+                                Choices = new List<ChatCompletionStreamingChoice>
+                                {
+                                    new ChatCompletionStreamingChoice
+                                    {
+                                        Index = 0,
+                                        Delta = delta,
+                                        FinishReason = assistantChoice.FinishReason
+                                    }
+                                },
+                                Usage = chunk.Usage
+                            };
+
                             var chunkJson = JsonSerializer.Serialize(streamingResponse);
                             await Response.WriteAsync($"data: {chunkJson}\n\n");
                             await Response.Body.FlushAsync();
                         }
-
-                        isFirstChunk = false;
                     }
                 }
 

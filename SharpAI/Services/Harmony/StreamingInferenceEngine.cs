@@ -86,7 +86,7 @@ public class StreamingInferenceEngine
             }
 
             rawResponseBuilder.Append(token);
-            var message = _parser.ParseToken(token);
+            var delta = _parser.ParseToken(token);
             tokenCount++;
 
             if (request.ResponseFormat != null && _parser.IsInFinalContent)
@@ -97,22 +97,51 @@ public class StreamingInferenceEngine
                 break;
             }
 
-            if (message != null)
+            if (delta != null && delta.HasNewContent)
             {
-                if (!_parser.IsComplete)
+                // Create streaming response from delta
+                var streamingResponse = delta.CreateStreamingResponseFromDelta(
+                    messages,
+                    request,
+                    null, // No finish reason for intermediate chunks
+                    false);
+                
+                // Convert streaming response to ChatCompletionResponse for compatibility
+                yield return new ChatCompletionResponse
                 {
-                    var partialResponse = _parser.GetPartialResponse();
-                    yield return partialResponse.CreateChatCompletionResponse(
-                        messages,
-                        request,
-                        CompletionObjectType.ChatCompletionChunk,
-                        null);
-                }
-                else
-                {
-                    // Completed message
-                    break;
-                }
+                    Id = streamingResponse.Id,
+                    Object = streamingResponse.Object,
+                    Created = streamingResponse.Created,
+                    Model = streamingResponse.Model,
+                    Choices = streamingResponse.Choices?.Select(c => new ChatCompletionChoice
+                    {
+                        Index = c.Index,
+                        Message = new ChatMessage
+                        {
+                            Role = c.Delta?.Role ?? ChatRole.Assistant,
+                            Content = c.Delta?.Content,
+                            Reasoning = c.Delta?.Reasoning,
+                            Commentary = c.Delta?.Commentary,
+                            ToolCalls = c.Delta?.ToolCalls?.Select(tc => new ToolCall
+                            {
+                                CallId = tc.Id ?? Guid.NewGuid().ToString(),
+                                Type = Enum.TryParse<ToolType>(tc.Type, true, out var type) ? type : ToolType.Function,
+                                Function = tc.Function != null ? new FunctionCall
+                                {
+                                    Name = tc.Function.Name ?? "",
+                                    Arguments = tc.Function.Arguments ?? ""
+                                } : null
+                            }).ToList()
+                        },
+                        FinishReason = c.FinishReason
+                    }).ToList() ?? new List<ChatCompletionChoice>(),
+                    Usage = streamingResponse.Usage
+                };
+            }
+            
+            if (_parser.IsComplete)
+            {
+                break;
             }
         }
 
@@ -140,25 +169,54 @@ public class StreamingInferenceEngine
                 }
 
                 rawResponseBuilder.Append(token);
-                var message = _parser.ParseToken(token);
+                var delta = _parser.ParseToken(token);
                 tokenCount++;
 
-                if (message != null)
+                if (delta != null && delta.HasNewContent)
                 {
-                    if (!_parser.IsComplete)
+                    // Create streaming response from delta
+                    var streamingResponse = delta.CreateStreamingResponseFromDelta(
+                        messages,
+                        request,
+                        null, // No finish reason for intermediate chunks
+                        false);
+                    
+                    // Convert streaming response to ChatCompletionResponse for compatibility
+                    yield return new ChatCompletionResponse
                     {
-                        var partialResponse = _parser.GetPartialResponse();
-                        yield return partialResponse.CreateChatCompletionResponse(
-                            messages,
-                            request,
-                            CompletionObjectType.ChatCompletionChunk,
-                            null);
-                    }
-                    else
-                    {
-                        // Completed message
-                        break;
-                    }
+                        Id = streamingResponse.Id,
+                        Object = streamingResponse.Object,
+                        Created = streamingResponse.Created,
+                        Model = streamingResponse.Model,
+                        Choices = streamingResponse.Choices?.Select(c => new ChatCompletionChoice
+                        {
+                            Index = c.Index,
+                            Message = new ChatMessage
+                            {
+                                Role = c.Delta?.Role ?? ChatRole.Assistant,
+                                Content = c.Delta?.Content,
+                                Reasoning = c.Delta?.Reasoning,
+                                Commentary = c.Delta?.Commentary,
+                                ToolCalls = c.Delta?.ToolCalls?.Select(tc => new ToolCall
+                                {
+                                    CallId = tc.Id ?? Guid.NewGuid().ToString(),
+                                    Type = Enum.TryParse<ToolType>(tc.Type, true, out var type) ? type : ToolType.Function,
+                                    Function = tc.Function != null ? new FunctionCall
+                                    {
+                                        Name = tc.Function.Name ?? "",
+                                        Arguments = tc.Function.Arguments ?? ""
+                                    } : null
+                                }).ToList()
+                            },
+                            FinishReason = c.FinishReason
+                        }).ToList() ?? new List<ChatCompletionChoice>(),
+                        Usage = streamingResponse.Usage
+                    };
+                }
+                
+                if (_parser.IsComplete)
+                {
+                    break;
                 }
             }
         }

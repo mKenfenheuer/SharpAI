@@ -16,6 +16,15 @@ public class HarmonyParser : IDisposable
     private HarmonyParserState _parserState = new HarmonyParserState();
     private StringBuilder _rawContent = new StringBuilder();
     private HarmonyAssistantContent _currentAssistantContent = new HarmonyAssistantContent();
+    
+    // Track previous content lengths for delta calculations
+    private readonly Dictionary<HarmonyChannel, int> _previousContentLengths = new Dictionary<HarmonyChannel, int>
+    {
+        { HarmonyChannel.Final, 0 },
+        { HarmonyChannel.Analysis, 0 },
+        { HarmonyChannel.Commentary, 0 }
+    };
+    
     public bool IsComplete { get; internal set; }
     public bool IsInFinalContent
     {
@@ -52,6 +61,11 @@ public class HarmonyParser : IDisposable
         _rawContent.Clear();
         _messages.Clear();
         IsComplete = false;
+        
+        // Reset content length tracking
+        _previousContentLengths[HarmonyChannel.Final] = 0;
+        _previousContentLengths[HarmonyChannel.Analysis] = 0;
+        _previousContentLengths[HarmonyChannel.Commentary] = 0;
     }
 
     /// <summary>
@@ -59,7 +73,7 @@ public class HarmonyParser : IDisposable
     /// </summary>
     /// <param name="token">New token to process</param>
     /// <returns>Delta containing changes in this parsing step</returns>
-    public HarmonyMessage ParseToken(string token)
+    public HarmonyDelta ParseToken(string token)
     {
         _rawContent.Append(token);
 
@@ -104,7 +118,13 @@ public class HarmonyParser : IDisposable
                 {
                     _currentAssistantContent.Channel = _parserState.CurrentChannel.Value;
                 }
-                break;
+                
+                // Return delta with role and channel information
+                return new HarmonyDelta
+                {
+                    Role = _parserState.CurrentRole,
+                    Channel = _parserState.CurrentChannel
+                };
 
             case var t when t == HarmonyFormattingToken.Channel.AsString():
                 // Transition to channel information in header
@@ -122,7 +142,7 @@ public class HarmonyParser : IDisposable
                 // End of message - mark as complete and start new message
                 _currentMessage.IsComplete = true;
                 FinishCurrentMessage();
-                return _messages.Last();
+                return new HarmonyDelta { IsComplete = true };
 
             case var t when t == HarmonyFormattingToken.EndMessageAssistantToTool.AsString():
                 // Tool call stop token - finalize any pending constraint type and create tool call
@@ -131,7 +151,11 @@ public class HarmonyParser : IDisposable
                 _currentMessage.IsComplete = true;
                 FinishCurrentMessage();
                 IsComplete = true;
-                return _messages.Last();
+                return new HarmonyDelta 
+                { 
+                    IsComplete = true,
+                    ToolCall = _currentAssistantContent.ToolCall
+                };
 
             case var t when t == HarmonyFormattingToken.EndMessageDoneSampling.AsString():
                 // Return stop token - finalize any pending constraint type and mark as complete
@@ -139,7 +163,7 @@ public class HarmonyParser : IDisposable
                 _currentMessage.IsComplete = true;
                 FinishCurrentMessage();
                 IsComplete = true;
-                return _messages.Last();
+                return new HarmonyDelta { IsComplete = true };
 
             case var t when t == HarmonyFormattingToken.ConstrainedFormat.AsString():
                 // Data type definition in tool call - prepare to collect constraint type and arguments
@@ -150,18 +174,10 @@ public class HarmonyParser : IDisposable
 
             default:
                 // Regular content token - handle based on current state
-                HandleContentToken(token);
-                break;
+                return HandleContentToken(token);
         }
-        if (_currentMessage != null &&
-        _currentMessage.Role == HarmonyRole.Assistant &&
-        (_parserState.CurrentChannel == HarmonyChannel.Final ||
-         _parserState.CurrentChannel == HarmonyChannel.Commentary) &&
-        _parserState.ParseState == HarmonyParseState.InMessageContent)
-        {
-            return _currentMessage;
-        }
-        return null;
+        
+        return new HarmonyDelta();
     }
 
     private void FinishCurrentMessage()
@@ -175,7 +191,7 @@ public class HarmonyParser : IDisposable
         }
     }
 
-    private void HandleContentToken(string token)
+    private HarmonyDelta HandleContentToken(string token)
     {
         if(_parserState.CurrentChannel == HarmonyChannel.Final && _currentMessage.Role == HarmonyRole.Assistant)
         {
@@ -191,6 +207,8 @@ public class HarmonyParser : IDisposable
             // Other tokens are not counted towards reasoning or completion
         }
 
+        var delta = new HarmonyDelta();
+
         switch (_parserState.ParseState)
         {
             case HarmonyParseState.WaitingForRole:
@@ -204,7 +222,7 @@ public class HarmonyParser : IDisposable
                 break;
 
             case HarmonyParseState.InMessageContent:
-                // Add content to current channel or message
+                // Add content to current channel or message and calculate delta
                 if (_parserState.CurrentChannel != null && _currentMessage.Role == HarmonyRole.Assistant)
                 {
                     if (_currentAssistantContent.Content == null)
@@ -212,6 +230,24 @@ public class HarmonyParser : IDisposable
                         _currentAssistantContent.Content = string.Empty;
                     }
                     _currentAssistantContent.Content += token;
+                    
+                    // Set delta properties based on channel
+                    delta.Channel = _parserState.CurrentChannel;
+                    delta.Role = _currentMessage.Role;
+                    delta.Content = token;
+                    
+                    switch (_parserState.CurrentChannel)
+                    {
+                        case HarmonyChannel.Final:
+                            delta.FinalContent = token;
+                            break;
+                        case HarmonyChannel.Analysis:
+                            delta.ReasoningContent = token;
+                            break;
+                        case HarmonyChannel.Commentary:
+                            delta.CommentaryContent = token;
+                            break;
+                    }
                 }
                 else if (_currentMessage.Role != HarmonyRole.Assistant)
                 {
@@ -220,6 +256,8 @@ public class HarmonyParser : IDisposable
                     if (textContent != null)
                     {
                         textContent.Text += token;
+                        delta.Content = token;
+                        delta.Role = _currentMessage.Role;
                     }
                 }
                 break;
@@ -241,6 +279,8 @@ public class HarmonyParser : IDisposable
                 // Ignore tokens when not in a valid state
                 break;
         }
+        
+        return delta;
     }
 
     private void InitializeMessageContent()
