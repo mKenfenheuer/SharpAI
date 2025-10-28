@@ -1,6 +1,17 @@
 # API Documentation
 
-SharpAI provides OpenAI-compatible REST APIs for chat completions, audio transcription, and model management. All endpoints follow OpenAI's API specifications for seamless integration.
+SharpAI provides **OpenAI-compatible REST APIs with extensions** for chat completions, audio transcription, and model management. 
+
+## 🔄 OpenAI Compatibility
+
+**Full OpenAI API compatibility** - Use SharpAI as a drop-in replacement for OpenAI with any existing client library.
+
+**Extensions included**:
+- `reasoning` field - Chain-of-thought reasoning content
+- `commentary` field - Meta-commentary about response process  
+- Multi-channel processing - Enhanced transparency
+
+> 📚 **See [OpenAI Compatibility Guide](OpenAI-Compatibility.md)** for complete compatibility documentation and migration examples.
 
 ## Base URL
 

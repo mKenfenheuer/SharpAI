@@ -4,7 +4,17 @@ namespace SharpAI.Models
 {
     /// <summary>
     /// Represents a single message in a chat conversation.
-    /// Compatible with OpenAI's chat message format.
+    /// 
+    /// <para><strong>OpenAI Compatibility:</strong></para>
+    /// <para>Fully compatible with OpenAI's chat message format.</para>
+    /// <para>Standard fields: role, content, name, tool_call_id, tool_calls</para>
+    /// 
+    /// <para><strong>Extensions:</strong></para>
+    /// <para>• <c>reasoning</c>: Chain-of-thought reasoning content (SharpAI extension)</para>
+    /// <para>• <c>commentary</c>: Meta-commentary about response process (SharpAI extension)</para>
+    /// 
+    /// <para><strong>Usage:</strong></para>
+    /// <para>Can be used with any OpenAI-compatible client. Extended fields are optional and ignored by standard clients.</para>
     /// </summary>
     public class ChatMessage
     {
@@ -37,6 +47,29 @@ namespace SharpAI.Models
         /// </summary>
         [JsonPropertyName("tool_calls")]
         public List<ToolCall>? ToolCalls { get; set; }
+
+        /// <summary>
+        /// The reasoning content from the model, typically used for chain-of-thought reasoning.
+        /// 
+        /// <para><strong>SharpAI Extension:</strong></para>
+        /// <para>This field is not part of the standard OpenAI API.</para>
+        /// <para>Contains analysis and reasoning content from the Harmony analysis channel.</para>
+        /// <para>Will be ignored by standard OpenAI-compatible clients.</para>
+        /// </summary>
+        [JsonPropertyName("reasoning")]
+        public string? Reasoning { get; set; }
+
+        /// <summary>
+        /// The commentary content from the model, used for meta-commentary about the response process.
+        /// 
+        /// <para><strong>SharpAI Extension:</strong></para>
+        /// <para>This field is not part of the standard OpenAI API.</para>
+        /// <para>Contains meta-commentary from the Harmony commentary channel.</para>
+        /// <para>Provides insights into the model's thinking process.</para>
+        /// <para>Will be ignored by standard OpenAI-compatible clients.</para>
+        /// </summary>
+        [JsonPropertyName("commentary")]
+        public string? Commentary { get; set; }
     }
 
     /// <summary>

@@ -1,17 +1,22 @@
 # SharpAI
 
-A powerful .NET 9 AI inference server providing OpenAI-compatible APIs for chat completions, audio transcription, and model management. Built with LLamaSharp for local LLM inference and Whisper.NET for speech-to-text capabilities.
+A powerful .NET 9 AI inference server providing **OpenAI-compatible APIs with extensions** for chat completions, audio transcription, and model management. Built with LLamaSharp for local LLM inference and Whisper.NET for speech-to-text capabilities.
 
 ## 🚀 Features
 
-- **OpenAI-Compatible API**: Drop-in replacement for OpenAI's chat completions and audio APIs
+- **OpenAI-Compatible API with Extensions**: Drop-in replacement for OpenAI's API plus enhanced reasoning visibility
+  - Standard OpenAI fields: `content`, `role`, `tool_calls`, etc.
+  - Extended fields: `reasoning` (chain-of-thought), `commentary` (meta-insights)
+  - Multi-channel processing for enhanced transparency
 - **Local LLM Inference**: Run large language models locally using LLamaSharp
 - **Audio Transcription**: High-quality speech-to-text using Whisper models
-- **Streaming Support**: Real-time streaming responses for chat completions
+- **Streaming Support**: Real-time streaming responses with reasoning and commentary
 - **Browser Integration**: Built-in web search capabilities with Brave Search API
 - **Tool Calling**: Advanced function calling with recursive tool execution
 - **Docker Support**: Easy deployment with Docker containers
 - **High Performance**: Built on .NET 9 with unsafe code optimizations
+
+> 📚 **Migration from OpenAI**: Simply change your base URL - all existing OpenAI client code works unchanged! [See compatibility guide](Documentation/OpenAI-Compatibility.md)
 
 ## 📋 Requirements
 

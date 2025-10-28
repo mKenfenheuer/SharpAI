@@ -189,7 +189,7 @@ public static class LLamaUtilities
         {
             Model = request.Model,
             Id = CreateCompletionId(),
-            Object = CompletionObjectType.ChatCompletion,
+            Object = completionObjectType,
             Created = GetCurrentUnixTimestamp(),
             Choices = completeMessages.ToChatCompletionChoices(finishReason),
             Usage = new TokenUsage
@@ -199,6 +199,103 @@ public static class LLamaUtilities
                 TotalTokens = reasoningTokens + promptTokens + completionTokens,
                 ReasoningTokens = reasoningTokens
             }
+        };
+
+        return response;
+    }
+
+    /// <summary>
+    /// Creates a streaming chat completion response with delta structure.
+    /// </summary>
+    /// <param name="harmonyResponse">Harmony response containing the partial content</param>
+    /// <param name="promptMessages">Original prompt messages</param>
+    /// <param name="request">Chat completion request</param>
+    /// <param name="finishReason">Finish reason for the chunk (null for intermediate chunks)</param>
+    /// <param name="isFirstChunk">Whether this is the first chunk in the stream</param>
+    /// <returns>Streaming chat completion response with delta structure</returns>
+    public static ChatCompletionStreamingResponse CreateStreamingChatCompletionResponse(
+        this HarmonyResponse harmonyResponse,
+        IEnumerable<ChatMessage> promptMessages,
+        ChatCompletionRequest request,
+        string? finishReason = null,
+        bool isFirstChunk = false)
+    {
+        var delta = new ChatCompletionDelta();
+        var choices = new List<ChatCompletionStreamingChoice>();
+
+        // For first chunk, include the role
+        if (isFirstChunk)
+        {
+            delta.Role = ChatRole.Assistant;
+        }
+
+        // Process the messages from harmony response
+        var harmonyMessages = harmonyResponse.Messages.ToChatMessages();
+        var assistantMessage = harmonyMessages.LastOrDefault(m => m.Role == ChatRole.Assistant);
+
+        if (assistantMessage != null)
+        {
+            // For content streaming
+            if (!string.IsNullOrEmpty(assistantMessage.Content))
+            {
+                delta.Content = assistantMessage.Content;
+            }
+
+            // For tool calls streaming
+            if (assistantMessage.ToolCalls?.Any() == true)
+            {
+                delta.ToolCalls = new List<ToolCallDelta>();
+                for (int i = 0; i < assistantMessage.ToolCalls.Count; i++)
+                {
+                    var toolCall = assistantMessage.ToolCalls[i];
+                    var toolCallDelta = new ToolCallDelta
+                    {
+                        Index = i
+                    };
+
+                    if (isFirstChunk)
+                    {
+                        toolCallDelta.Id = toolCall.CallId;
+                        toolCallDelta.Type = toolCall.Type.ToString().ToLower();
+                        toolCallDelta.Function = new FunctionCallDelta
+                        {
+                            Name = toolCall.Function?.Name
+                        };
+                    }
+
+                    if (toolCall.Function?.Arguments != null)
+                    {
+                        toolCallDelta.Function ??= new FunctionCallDelta();
+                        toolCallDelta.Function.Arguments = toolCall.Function.Arguments;
+                    }
+
+                    delta.ToolCalls.Add(toolCallDelta);
+                }
+            }
+        }
+
+        var choice = new ChatCompletionStreamingChoice
+        {
+            Index = 0,
+            Delta = delta,
+            FinishReason = finishReason
+        };
+
+        choices.Add(choice);
+
+        var response = new ChatCompletionStreamingResponse
+        {
+            Model = request.Model,
+            Id = CreateCompletionId(),
+            Object = CompletionObjectType.ChatCompletionChunk,
+            Created = GetCurrentUnixTimestamp(),
+            Choices = choices,
+            Usage = finishReason != null ? new TokenUsage
+            {
+                PromptTokens = 0, // Can be calculated if needed
+                CompletionTokens = 0, // Can be calculated if needed
+                TotalTokens = 0
+            } : null
         };
 
         return response;
@@ -219,7 +316,12 @@ public static class LLamaUtilities
     public static List<ChatMessage> ToChatMessages(this List<HarmonyMessage> harmonyMessages)
     {
         var chatMessages = new List<ChatMessage>();
+        
+        // Group assistant content by channel
+        var channelContent = new Dictionary<string, ChatMessage>();
+        
         foreach (var harmonyMessage in harmonyMessages)
+        {
             foreach (var content in harmonyMessage.Content)
             {
                 if (content is HarmonySystemContent)
@@ -232,22 +334,47 @@ public static class LLamaUtilities
                         Role = ChatRole.System,
                         Content = content.StringContent,
                     });
+                    continue;
                 }
 
-                var chatMessage = new ChatMessage
+                var channelString = content.ChannelString ?? "final";
+                
+                // For assistant messages, we need to handle channels specially
+                if (harmonyMessage.Role == HarmonyRole.Assistant)
                 {
-                    Role = harmonyMessage.Role.ToChatRole(),
-                    Content = content.StringContent,
-                    Name = content.ChannelString,
-                };
-
-                if (harmonyMessage.Role == HarmonyRole.Assistant && harmonyMessage.Content.Cast<HarmonyAssistantContent>()
-                    .Any(c => c.ToolCall != null))
-                {
-                    foreach (var toolCall in harmonyMessage.Content.Cast<HarmonyAssistantContent>()
-                        .Where(c => c.ToolCall != null)
-                        .Select(c => c.ToolCall!))
+                    // Get or create chat message for this channel
+                    if (!channelContent.TryGetValue(channelString, out var chatMessage))
                     {
+                        chatMessage = new ChatMessage
+                        {
+                            Role = ChatRole.Assistant,
+                            Name = channelString,
+                        };
+                        channelContent[channelString] = chatMessage;
+                    }
+
+                    // Map content based on channel
+                    switch (channelString.ToLowerInvariant())
+                    {
+                        case "final":
+                            chatMessage.Content = content.StringContent;
+                            break;
+                        case "analysis":
+                            chatMessage.Reasoning = content.StringContent;
+                            break;
+                        case "commentary":
+                            chatMessage.Commentary = content.StringContent;
+                            break;
+                        default:
+                            // Unknown channel, put in content
+                            chatMessage.Content = content.StringContent;
+                            break;
+                    }
+
+                    // Handle tool calls
+                    if (content is HarmonyAssistantContent assistantContent && assistantContent.ToolCall != null)
+                    {
+                        var toolCall = assistantContent.ToolCall;
                         chatMessage.ToolCalls ??= new List<ToolCall>();
                         chatMessage.ToolCalls.Add(new ToolCall
                         {
@@ -261,8 +388,23 @@ public static class LLamaUtilities
                         });
                     }
                 }
-                chatMessages.Add(chatMessage);
+                else
+                {
+                    // For non-assistant messages, create standard chat message
+                    var chatMessage = new ChatMessage
+                    {
+                        Role = harmonyMessage.Role.ToChatRole(),
+                        Content = content.StringContent,
+                        Name = channelString != "final" ? channelString : null,
+                    };
+                    chatMessages.Add(chatMessage);
+                }
             }
+        }
+        
+        // Add all channel-based assistant messages
+        chatMessages.AddRange(channelContent.Values);
+        
         return chatMessages;
     }
 
