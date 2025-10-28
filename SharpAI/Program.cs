@@ -47,8 +47,8 @@ public class Program
         builder.Services.AddScoped<SharpAI.Services.Harmony.HarmonyParser>();
         
         // Register browser services
-        builder.Services.AddSingleton<SharpAI.Services.Browser.BrowserService>();
-        builder.Services.AddSingleton<SharpAI.Services.Harmony.BrowserToolHandler>();
+        builder.Services.AddScoped<SharpAI.Services.Browser.BrowserService>();
+        builder.Services.AddScoped<SharpAI.Services.Harmony.BrowserToolHandler>();
         
         builder.Services.AddSingleton<SharpAI.Services.LLamaSharpService>();
         builder.Services.AddSingleton<SharpAI.Services.WhisperService>();

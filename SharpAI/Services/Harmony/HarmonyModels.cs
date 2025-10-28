@@ -157,6 +157,10 @@ public class HarmonyAssistantContent : HarmonyMessageContent
     /// </summary>
     public HarmonyToolCall? ToolCall { get; set; }
 
+    internal override string? StringContent => Content;
+
+    internal override string? ChannelString => Channel.AsString();
+
     internal override void RenderInto(StringBuilder into, HarmonyMessageRenderConfig? options)
     {
         into.Append(HarmonyFormattingToken.Channel.AsString());
@@ -500,6 +504,8 @@ Use this function without `id` to scroll to a new location of an opened page.", 
 public abstract class HarmonyMessageContent
 {
     internal abstract void RenderInto(StringBuilder into, HarmonyMessageRenderConfig? options);
+    internal abstract string? StringContent { get; }
+    internal abstract string? ChannelString { get; }
 }
 
 /// <summary>
@@ -508,6 +514,9 @@ public abstract class HarmonyMessageContent
 public class HarmonyTextContent : HarmonyMessageContent
 {
     public string Text { get; set; } = string.Empty;
+    internal override string StringContent => Text;
+
+    internal override string? ChannelString => null;
 
     public HarmonyTextContent() { }
     public HarmonyTextContent(string text) { Text = text; }
@@ -527,7 +536,9 @@ public class HarmonyToolResultContent : HarmonyMessageContent
 {
     public HarmonyToolCall ToolCall { get; set; }
     public string Content { get; set; } = string.Empty;
-    
+    internal override string? StringContent => Content;
+    internal override string? ChannelString => null;
+
     public HarmonyToolResultContent(HarmonyToolCall toolCall, string content)
     {
         ToolCall = toolCall;
@@ -561,6 +572,17 @@ public class HarmonySystemContent : HarmonyMessageContent
     public string? KnowledgeCutoff { get; set; } = "2024-06";
     public HarmonyChannelConfig? ChannelConfig { get; set; }
     public Dictionary<string, HarmonyToolNamespaceConfig>? Tools { get; set; }
+
+    internal override string? StringContent {
+        get
+        {
+            var sb = new StringBuilder();
+            RenderInto(sb, null);
+            return sb.ToString();
+        }
+    }
+
+    internal override string? ChannelString => null;
 
     public HarmonySystemContent()
     {
@@ -694,6 +716,8 @@ public class HarmonyDeveloperContent : HarmonyMessageContent
     public string? Instructions { get; set; }
     public Dictionary<string, HarmonyToolNamespaceConfig>? Tools { get; set; }
     public List<HarmonyResponseFormat> ResponseFormats { get; set; } = new List<HarmonyResponseFormat>();
+    internal override string? StringContent => Instructions;
+    internal override string? ChannelString => null;
 
     public static HarmonyDeveloperContent New() => new();
 

@@ -38,7 +38,7 @@ public class LLamaSharpService : IDisposable
     /// </summary>
     /// <param name="request">Chat completion request</param>
     /// <returns>Chat completion response</returns>
-    public async Task<ChatCompletionResponse> GenerateChatCompletionAsync(ChatCompletionRequest request)
+    public async IAsyncEnumerable<ChatCompletionResponse> GenerateChatCompletionAsync(ChatCompletionRequest request)
     {
         using var scope = _serviceProvider.CreateScope();
         var streamingEngine = scope.ServiceProvider.GetRequiredService<StreamingInferenceEngine>();
@@ -77,95 +77,13 @@ public class LLamaSharpService : IDisposable
         var allMessages = PrepareMessages(request.Messages);
 
         // Use unified streaming engine but collect all results
-        var contentBuilder = new StringBuilder();
-        HarmonyResponse? finalHarmonyResponse = null;
+        ChatCompletionResponse? finalResponse = null;
         var reasoningTokens = 0;
 
         await foreach (var result in streamingEngine.GenerateStreamAsync(allMessages, request, modelInstance, inferenceParams))
         {
-            if (result.IsComplete && result.HarmonyResponse != null)
-            {
-                finalHarmonyResponse = result.HarmonyResponse;
-                break;
-            }
-
-            if (result.Delta != null)
-            {
-                // Extract content from harmony message delta
-                var deltaContent = ExtractContentFromHarmonyMessage(result.Delta);
-                if (!string.IsNullOrEmpty(deltaContent))
-                {
-                    contentBuilder.Append(deltaContent);
-                }
-            }
+            yield return result;
         }
-
-        // Use the harmony response from streaming engine
-        var harmonyResponse = finalHarmonyResponse ?? new HarmonyResponse
-        {
-            Messages = new List<HarmonyMessage>()
-        };
-
-        // Extract final content and tool calls from harmony response
-        var finalContent = harmonyResponse.ExtractFinalContent();
-        var toolCalls = harmonyResponse.ToolCall != null ? new List<HarmonyToolCall> { harmonyResponse.ToolCall } : new List<HarmonyToolCall>();
-
-        // Use content builder if no final content extracted
-        if (string.IsNullOrEmpty(finalContent))
-        {
-            finalContent = contentBuilder.ToString();
-        }
-
-        var assistantMessage = new ChatMessage { Role = ChatRole.Assistant, Content = finalContent };
-        var finishReason = "stop";
-
-        // Check if the response contains function calls
-        if (toolCalls.Any())
-        {
-            assistantMessage.ToolCalls = LLamaUtilities.ConvertHarmonyToolCalls(toolCalls);
-            assistantMessage.Content = null;
-            finishReason = "tool_calls";
-
-            // If parallel tool calls are disabled, only keep the first one
-            if (request.ParallelToolCalls == false)
-            {
-                assistantMessage.ToolCalls = assistantMessage.ToolCalls.Take(1).ToList();
-            }
-        }
-
-        // Calculate reasoning tokens if reasoning was used
-        var reasoningContent = harmonyResponse.ExtractReasoningContent();
-        if (request.ReasoningEffort.HasValue && !string.IsNullOrEmpty(reasoningContent))
-        {
-            reasoningTokens = LLamaUtilities.EstimateReasoningTokens(reasoningContent, request.ReasoningEffort.Value);
-        }
-
-        var response = new ChatCompletionResponse
-        {
-            Id = LLamaUtilities.CreateCompletionId(),
-            Object = CompletionObjectType.ChatCompletion,
-            Created = LLamaUtilities.GetCurrentUnixTimestamp(),
-            Model = request.Model,
-            Choices = new List<ChatCompletionChoice>
-            {
-                new ChatCompletionChoice
-                {
-                    Index = 0,
-                    Message = assistantMessage,
-                    FinishReason = finishReason
-                }
-            },
-            Usage = new TokenUsage
-            {
-                PromptTokens = LLamaUtilities.EstimateTokens(harmonyFormatter.FormatPrompt(allMessages, request.Tools?.Any() == true, request.ReasoningEffort ?? ReasoningEffortLevel.Medium, request.Tools, request.ResponseFormat)),
-                CompletionTokens = LLamaUtilities.EstimateTokens(finalContent ?? ""),
-                ReasoningTokens = reasoningTokens > 0 ? reasoningTokens : null,
-                TotalTokens = 0 // Will be calculated
-            }
-        };
-
-        response.Usage.TotalTokens = response.Usage.PromptTokens + response.Usage.CompletionTokens + reasoningTokens;
-        return response;
     }
 
     /// <summary>

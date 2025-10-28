@@ -38,7 +38,7 @@ namespace SharpAI.Api.Chat
         {
             try
             {
-                _logger.LogInformation("Received chat completion request for model: {Model}", request.Model);
+                _logger.LogInformation("Received chat completion request for model: {Model}, Stream: {Stream}", request.Model, request.Stream);
 
                 // Validate request
                 if (request.Messages == null || !request.Messages.Any())
@@ -46,7 +46,15 @@ namespace SharpAI.Api.Chat
                     return BadRequest(new { error = new { message = "Messages cannot be empty", type = "invalid_request_error" } });
                 }
 
-                return await HandleNonStreamingResponse(request);
+                // Check if streaming is requested
+                if (request.Stream == true)
+                {
+                    return await HandleStreamingResponse(request);
+                }
+                else
+                {
+                    return await HandleNonStreamingResponse(request);
+                }
             }
             catch (Exception ex)
             {
@@ -62,8 +70,51 @@ namespace SharpAI.Api.Chat
         /// <returns>A complete chat completion response</returns>
         private async Task<IActionResult> HandleNonStreamingResponse(ChatCompletionRequest request)
         {
-            var response = await _llamaService.GenerateChatCompletionAsync(request);
+            ChatCompletionResponse response = null;
+
+            await foreach (var result in _llamaService.GenerateChatCompletionAsync(request))
+            {
+                response = result;
+            }
+
             return Ok(response);
+        }
+
+        /// <summary>
+        /// Handles streaming chat completion requests using Server-Sent Events.
+        /// </summary>
+        /// <param name="request">The chat completion request</param>
+        /// <returns>A streaming response</returns>
+        private async Task<IActionResult> HandleStreamingResponse(ChatCompletionRequest request)
+        {
+            Response.ContentType = "text/event-stream";
+            Response.Headers.Add("Cache-Control", "no-cache");
+            Response.Headers.Add("Connection", "keep-alive");
+
+            try
+            {
+                await foreach (var chunk in _llamaService.GenerateChatCompletionAsync(request))
+                {
+                    var chunkJson = JsonSerializer.Serialize(chunk);
+                    await Response.WriteAsync($"data: {chunkJson}\n\n");
+                    await Response.Body.FlushAsync();
+                }
+
+                // Send the final [DONE] message to indicate the stream has ended
+                await Response.WriteAsync("data: [DONE]\n\n");
+                await Response.Body.FlushAsync();
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error during streaming chat completion");
+                var errorResponse = new { error = new { message = "Stream error", type = "internal_error" } };
+                var errorJson = JsonSerializer.Serialize(errorResponse);
+                await Response.WriteAsync($"data: {errorJson}\n\n");
+                await Response.Body.FlushAsync();
+            }
+
+            await Response.CompleteAsync();
+            return new EmptyResult();
         }
     }
 }

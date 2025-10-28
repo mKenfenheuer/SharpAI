@@ -17,7 +17,8 @@ public class HarmonyParser : IDisposable
     private StringBuilder _rawContent = new StringBuilder();
     private HarmonyAssistantContent _currentAssistantContent = new HarmonyAssistantContent();
     public bool IsComplete { get; internal set; }
-    public bool IsInFinalContent { 
+    public bool IsInFinalContent
+    {
         get
         {
             return _currentMessage != null &&
@@ -26,6 +27,8 @@ public class HarmonyParser : IDisposable
                    _parserState.ParseState == HarmonyParseState.InMessageContent;
         }
     }
+    public int ReasoningTokens { get; internal set; } = 0;
+    public int CompletionTokens { get; internal set; } = 0;
 
     /// <summary>
     /// Initializes a new instance of the HarmonyParser.
@@ -174,6 +177,20 @@ public class HarmonyParser : IDisposable
 
     private void HandleContentToken(string token)
     {
+        if(_parserState.CurrentChannel == HarmonyChannel.Final && _currentMessage.Role == HarmonyRole.Assistant)
+        {
+            CompletionTokens ++;
+        }
+        else if ((_parserState.CurrentChannel == HarmonyChannel.Analysis && _currentMessage.Role == HarmonyRole.Assistant) ||
+                 (_parserState.CurrentChannel == HarmonyChannel.Commentary && _currentMessage.Role == HarmonyRole.Assistant))
+        {
+            ReasoningTokens ++;
+        }
+        else
+        {
+            // Other tokens are not counted towards reasoning or completion
+        }
+
         switch (_parserState.ParseState)
         {
             case HarmonyParseState.WaitingForRole:
@@ -318,7 +335,7 @@ public class HarmonyParser : IDisposable
     private string ExtractToolNameFromRecipient(string recipient)
     {
         // Extract tool name from recipient like "functions.get_current_weather"
-        var lastDotIndex = recipient.LastIndexOf('.');
+        var lastDotIndex = recipient.IndexOf('.');
         return lastDotIndex >= 0 ? recipient.Substring(lastDotIndex + 1) : recipient;
     }
 
@@ -394,6 +411,17 @@ public class HarmonyParser : IDisposable
         _messages.Clear();
         _messages = null;
         _currentMessage = null;
+    }
+
+    public HarmonyResponse GetPartialResponse()
+    {
+        var messages = new List<HarmonyMessage>();
+        messages.AddRange(_messages);
+        if (_currentMessage != null)
+        {
+            messages.Add(_currentMessage);
+        }
+        return new HarmonyResponse { Messages = messages };
     }
 
     private class HarmonyParserState

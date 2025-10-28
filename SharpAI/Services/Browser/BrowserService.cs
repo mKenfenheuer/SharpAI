@@ -7,6 +7,32 @@ using SharpAI.Models.Browser;
 namespace SharpAI.Services.Browser;
 
 /// <summary>
+/// Represents a search session with its results for later reference.
+/// </summary>
+public class SearchSession
+{
+    /// <summary>
+    /// Unique identifier for this search session.
+    /// </summary>
+    public int Id { get; set; }
+    
+    /// <summary>
+    /// The search query that was executed.
+    /// </summary>
+    public string Query { get; set; } = string.Empty;
+    
+    /// <summary>
+    /// The search results from this session.
+    /// </summary>
+    public List<BraveSearchResult> Results { get; set; } = new();
+    
+    /// <summary>
+    /// When this search session was created.
+    /// </summary>
+    public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
+}
+
+/// <summary>
 /// Provides browser functionality including web search and page content retrieval.
 /// Integrates with Brave Search API for web search capabilities and maintains page cache for navigation.
 /// </summary>
@@ -17,7 +43,10 @@ public class BrowserService
     private readonly BraveSearchOptions _braveOptions;
     private readonly Dictionary<int, BrowserPage> _pages = new();
     private readonly Dictionary<int, string> _linkIdToUrlMapping = new();
+    private readonly List<BraveSearchResult> _lastSearchResults = new();
+    private readonly Dictionary<int, SearchSession> _searchSessions = new();
     private int _nextCursor = 1;
+    private int _nextSearchSessionId = 1;
 
     /// <summary>
     /// Initializes a new instance of the BrowserService.
@@ -33,66 +62,66 @@ public class BrowserService
     }
 
     /// <summary>
-    /// Performs a web search and returns results in JSON format.
+    /// Performs a web search and returns results in markdown format.
     /// </summary>
     /// <param name="args">Search parameters including query and result count</param>
-    /// <returns>JSON-formatted search results or error message</returns>
-    public async Task<string> SearchJsonAsync(BrowserSearchArgs args)
+    /// <returns>Markdown-formatted search results or error message</returns>
+    public async Task<string> SearchAsync(BrowserSearchArgs args)
     {
-        _logger.LogInformation("Performing JSON web search for query: {Query}", args.Query);
+        _logger.LogInformation("Performing web search for query: {Query}", args.Query);
 
         try
         {
             if (string.IsNullOrEmpty(_braveOptions.ApiKey))
             {
-                _logger.LogWarning("Brave Search API key not configured for JSON search");
-                return JsonSerializer.Serialize(new { 
-                    error = "Browser search is not available. The Brave Search API key is not configured. Please contact the administrator to set up the API key in the application configuration." 
-                });
+                _logger.LogWarning("Brave Search API key not configured for search");
+                return "Browser search is not available. The Brave Search API key is not configured. Please contact the administrator to set up the API key in the application configuration.";
             }
 
             var results = await CallBraveSearchApiAsync(args.Query, args.TopN ?? 10);
             
-            // Simplify the response to only include id, title, description, and URL
-            var simplifiedResults = new List<object>();
-            
             if (results?.Web?.Results != null)
             {
-                simplifiedResults = results.Web.Results.Take(args.TopN ?? 10).Select((result, index) => new
+                var searchResults = results.Web.Results.Take(args.TopN ?? 10).ToList();
+                
+                // Create a new search session
+                var searchSession = new SearchSession
                 {
-                    id = index + 1,
-                    title = result.Title,
-                    description = result.Description,
-                    url = result.Url
-                }).Cast<object>().ToList();
+                    Id = _nextSearchSessionId++,
+                    Query = args.Query,
+                    Results = searchResults
+                };
+                _searchSessions[searchSession.Id] = searchSession;
+                
+                // Store the complete search results for later reference
+                _lastSearchResults.Clear();
+                _lastSearchResults.AddRange(searchResults);
 
                 // Store URL mapping for later use in open function
-                UpdateLinkIdMapping(results.Web.Results.Take(args.TopN ?? 10).ToList());
-                _logger.LogInformation("JSON search completed successfully, returned {Count} results", simplifiedResults.Count);
+                UpdateLinkIdMapping(searchResults);
+                _logger.LogInformation("Search completed successfully, returned {Count} results in session {SessionId}", searchResults.Count, searchSession.Id);
+                
+                // Return results in markdown format
+                return FormatBraveSearchResults(results, args.TopN ?? 10);
             }
 
-            return JsonSerializer.Serialize(new
-            {
-                query = args.Query,
-                count = simplifiedResults.Count,
-                results = simplifiedResults
-            }, new JsonSerializerOptions { WriteIndented = true });
+            return "No search results found.";
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Error performing JSON browser search for query: {Query}", args.Query);
-            return JsonSerializer.Serialize(new { error = $"Failed to perform search: {ex.Message}" });
+            _logger.LogError(ex, "Error performing browser search for query: {Query}", args.Query);
+            return $"Error: Failed to perform search: {ex.Message}";
         }
     }
 
     /// <summary>
-    /// Opens a web page and returns content in JSON format, or scrolls to a location on an existing page.
+    /// Opens a web page and returns content in markdown format, or scrolls to a location on an existing page.
     /// </summary>
     /// <param name="args">Open parameters including URL/ID, cursor, and location</param>
-    /// <returns>JSON-formatted page content or error message</returns>
-    public async Task<string> OpenJsonAsync(BrowserOpenArgs args)
+    /// <returns>Markdown-formatted page content or error message</returns>
+    public async Task<string> OpenAsync(BrowserOpenArgs args)
     {
-        _logger.LogInformation("Opening page for JSON response - Id: {Id}, Cursor: {Cursor}, Location: {Loc}", args.Id, args.Cursor, args.Loc);
+        _logger.LogInformation("Opening page for markdown response - Id: {Id}, Cursor: {Cursor}, Location: {Loc}", args.Id, args.Cursor, args.Loc);
 
         try
         {
@@ -102,39 +131,35 @@ public class BrowserService
             if (args.Id is string urlString)
             {
                 url = urlString;
-                _logger.LogDebug("Using direct URL for JSON: {Url}", url);
+                _logger.LogDebug("Using direct URL for markdown: {Url}", url);
             }
             else if (args.Id is int linkId && linkId > 0)
             {
-                url = GetUrlFromLinkId(linkId);
-                _logger.LogDebug("Resolved link ID {LinkId} to URL for JSON: {Url}", linkId, url);
-            }
-            else if (args.Cursor.HasValue && args.Cursor > 0 && _pages.ContainsKey(args.Cursor.Value))
-            {
-                // Scrolling on existing page - return JSON format
-                var existingPage = _pages[args.Cursor.Value];
-                var scrollResult = ScrollToLocation(existingPage, args.Loc ?? -1, args.NumLines ?? 20);
-                
-                _logger.LogDebug("Returning JSON scroll result for cursor: {Cursor}", args.Cursor.Value);
-                return JsonSerializer.Serialize(new
+                // Try to get URL from stored search results first (more reliable)
+                if (linkId <= _lastSearchResults.Count)
                 {
-                    cursor = existingPage.Cursor,
-                    url = existingPage.Url,
-                    title = existingPage.Title,
-                    content = scrollResult,
-                    loc = args.Loc ?? -1,
-                    num_lines = args.NumLines ?? 20,
-                    total_lines = existingPage.Lines.Count
-                }, new JsonSerializerOptions { WriteIndented = true });
+                    var searchResult = _lastSearchResults[linkId - 1]; // Convert to 0-based index
+                    url = searchResult.Url;
+                    _logger.LogDebug("Resolved link ID {LinkId} to URL from stored search results: {Url}", linkId, url);
+                }
+                else
+                {
+                    // Fallback to the old mapping method
+                    url = GetUrlFromLinkId(linkId);
+                    _logger.LogDebug("Resolved link ID {LinkId} to URL using fallback method: {Url}", linkId, url);
+                }
             }
-            else
+            else if (args.Cursor.HasValue && args.Cursor > 0 && _pages.ContainsKey(args.Cursor.Value) && args.Id == null)
             {
-                return JsonSerializer.Serialize(new { error = "No valid URL or page specified to open." });
+                // Scrolling on existing page - only when no ID is provided
+                var existingPage = _pages[args.Cursor.Value];
+                
+                _logger.LogDebug("Returning markdown scroll result for cursor: {Cursor}", args.Cursor.Value);
+                return FormatPageContent(existingPage, args.Loc ?? 1, args.NumLines ?? 20);
             }
-
-            if (string.IsNullOrEmpty(url))
+            else if (string.IsNullOrEmpty(url))
             {
-                return JsonSerializer.Serialize(new { error = "Could not determine URL to open." });
+                return "Error: No valid URL or page specified to open.";
             }
 
             // Fetch the page content
@@ -149,33 +174,103 @@ public class BrowserService
             };
 
             _pages[page.Cursor] = page;
-            _logger.LogInformation("Successfully loaded page '{Title}' for JSON response with cursor {Cursor}", page.Title, page.Cursor);
+            _logger.LogInformation("Successfully loaded page '{Title}' for markdown response with cursor {Cursor}", page.Title, page.Cursor);
 
-            // Return the page data in JSON format
-            var startLine = args.Loc ?? 1;
-            var numLines = args.NumLines ?? 20;
-            var startIndex = Math.Max(0, startLine - 1);
-            var endIndex = Math.Min(page.Lines.Count, startIndex + numLines);
-            
-            var displayedLines = page.Lines.Skip(startIndex).Take(numLines).ToList();
-
-            return JsonSerializer.Serialize(new
-            {
-                cursor = page.Cursor,
-                url = page.Url,
-                title = page.Title,
-                lines = displayedLines,
-                start_line = startLine,
-                num_lines = numLines,
-                total_lines = page.Lines.Count,
-                view_source = args.ViewSource ?? false,
-                content_length = pageContent.Length
-            }, new JsonSerializerOptions { WriteIndented = true });
+            // Return the page data in markdown format with cursor
+            return FormatPageContent(page, args.Loc ?? 1, args.NumLines ?? 20);
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Error opening page for JSON with args: {@Args}", args);
-            return JsonSerializer.Serialize(new { error = $"Failed to open page: {ex.Message}" });
+            _logger.LogError(ex, "Error opening page for markdown with args: {@Args}", args);
+            return $"Error: Failed to open page: {ex.Message}";
+        }
+    }
+
+    /// <summary>
+    /// Searches for a pattern within a loaded page.
+    /// <summary>
+    /// Gets search results from a specific search session in markdown format.
+    /// </summary>
+    /// <param name="sessionId">The search session ID</param>
+    /// <returns>Markdown-formatted search results from the session or error message</returns>
+    public string GetSearchSession(int sessionId)
+    {
+        _logger.LogInformation("Retrieving search session: {SessionId}", sessionId);
+
+        try
+        {
+            if (!_searchSessions.TryGetValue(sessionId, out var session))
+            {
+                return $"Error: Search session {sessionId} not found.";
+            }
+
+            var formatted = new List<string>
+            {
+                $"Search Session {session.Id}: \"{session.Query}\"",
+                $"Created: {session.CreatedAt:yyyy-MM-dd HH:mm:ss}",
+                $"Found {session.Results.Count} search results:",
+                ""
+            };
+
+            for (int i = 0; i < session.Results.Count; i++)
+            {
+                var result = session.Results[i];
+                var linkId = i + 1;
+                
+                formatted.Add($"【{linkId}†{result.Url}】");
+                formatted.Add($"**{result.Title}**");
+                formatted.Add(result.Description);
+                formatted.Add("");
+            }
+
+            return string.Join("\n", formatted);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error retrieving search session: {SessionId}", sessionId);
+            return $"Error: Failed to retrieve search session: {ex.Message}";
+        }
+    }
+
+    /// <summary>
+    /// Gets a list of all available search sessions in markdown format.
+    /// </summary>
+    /// <returns>Markdown-formatted list of search sessions</returns>
+    public string GetSearchSessions()
+    {
+        _logger.LogInformation("Retrieving all search sessions");
+
+        try
+        {
+            var sessions = _searchSessions.Values
+                .OrderByDescending(s => s.CreatedAt)
+                .ToList();
+
+            if (!sessions.Any())
+            {
+                return "No search sessions found.";
+            }
+
+            var formatted = new List<string>
+            {
+                $"Found {sessions.Count} search session(s):",
+                ""
+            };
+
+            foreach (var session in sessions)
+            {
+                formatted.Add($"**Session {session.Id}**: \"{session.Query}\"");
+                formatted.Add($"  - Created: {session.CreatedAt:yyyy-MM-dd HH:mm:ss}");
+                formatted.Add($"  - Results: {session.Results.Count}");
+                formatted.Add("");
+            }
+
+            return string.Join("\n", formatted);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error retrieving search sessions");
+            return $"Error: Failed to retrieve search sessions: {ex.Message}";
         }
     }
 
@@ -322,6 +417,7 @@ public class BrowserService
 
     /// <summary>
     /// Updates the internal mapping of link IDs to URLs from search results.
+    /// This is maintained for backward compatibility with the old mapping system.
     /// </summary>
     /// <param name="results">Search results to extract URLs from</param>
     private void UpdateLinkIdMapping(List<BraveSearchResult> results)
@@ -515,19 +611,29 @@ public class BrowserService
     }
 
     /// <summary>
-    /// Gets URL from link ID using the stored mapping from search results.
+    /// Gets URL from link ID using the stored search results or mapping from search results.
     /// </summary>
     /// <param name="linkId">Link ID from search results</param>
     /// <returns>Corresponding URL or fallback URL</returns>
     private string GetUrlFromLinkId(int linkId)
     {
-        // Use the stored mapping from the last search results
+        // First try to get from stored search results (most reliable)
+        if (linkId > 0 && linkId <= _lastSearchResults.Count)
+        {
+            var searchResult = _lastSearchResults[linkId - 1]; // Convert to 0-based index
+            _logger.LogDebug("Retrieved URL from stored search results for ID {LinkId}: {Url}", linkId, searchResult.Url);
+            return searchResult.Url;
+        }
+        
+        // Fallback to the stored mapping from the last search results
         if (_linkIdToUrlMapping.TryGetValue(linkId, out var url))
         {
+            _logger.LogDebug("Retrieved URL from link mapping for ID {LinkId}: {Url}", linkId, url);
             return url;
         }
         
-        // Fallback for demo purposes
+        // Last resort fallback for demo purposes
+        _logger.LogWarning("No URL found for link ID {LinkId}, using fallback", linkId);
         return $"https://example.com/link-{linkId}";
     }
 }

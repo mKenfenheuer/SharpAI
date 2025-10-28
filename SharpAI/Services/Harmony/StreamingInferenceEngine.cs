@@ -34,7 +34,7 @@ public class StreamingInferenceEngine
     /// Generates a streaming response with browser tool integration.
     /// Uses only Harmony library parsing methods.
     /// </summary>
-    public async IAsyncEnumerable<StreamingInferenceResult> GenerateStreamAsync(
+    public async IAsyncEnumerable<ChatCompletionResponse> GenerateStreamAsync(
         List<ChatMessage> messages,
         ChatCompletionRequest request,
         ModelInstance modelInstance,
@@ -63,11 +63,13 @@ public class StreamingInferenceEngine
 
         // Pass the predefined next turn role to the parser
         var nextTurnToken = new[] { "<|start|>", "assistant" };
+        var tokenCount = 0;
 
         foreach (var t in nextTurnToken)
         {
             _parser.ParseToken(t);
             rawResponseBuilder.Append(t);
+            tokenCount++;
         }
 
         // Create a fresh stateless executor to avoid state contamination from previous inferences
@@ -85,6 +87,7 @@ public class StreamingInferenceEngine
 
             rawResponseBuilder.Append(token);
             var message = _parser.ParseToken(token);
+            tokenCount++;
 
             if (request.ResponseFormat != null && _parser.IsInFinalContent)
             {
@@ -98,12 +101,12 @@ public class StreamingInferenceEngine
             {
                 if (!_parser.IsComplete)
                 {
-                    yield return new StreamingInferenceResult
-                    {
-                        Delta = message,
-                        IsComplete = false,
-                        RawResponse = string.Empty // Raw response tracking would need to be implemented
-                    };
+                    var partialResponse = _parser.GetPartialResponse();
+                    yield return partialResponse.CreateChatCompletionResponse(
+                        messages,
+                        request,
+                        CompletionObjectType.ChatCompletionChunk,
+                        null);
                 }
                 else
                 {
@@ -126,7 +129,7 @@ public class StreamingInferenceEngine
             // Create a fresh stateless executor to avoid state contamination from previous inferences
             executor = new StatelessExecutor(modelInstance.Weights!, modelInstance.Context!.Params);
 
-            var prompt = formattedPrompt + rawResponseBuilder.ToString();   
+            var prompt = formattedPrompt + rawResponseBuilder.ToString();
 
             await foreach (var token in executor.InferAsync(prompt, inferenceParams))
             {
@@ -138,17 +141,18 @@ public class StreamingInferenceEngine
 
                 rawResponseBuilder.Append(token);
                 var message = _parser.ParseToken(token);
+                tokenCount++;
 
                 if (message != null)
                 {
                     if (!_parser.IsComplete)
                     {
-                        yield return new StreamingInferenceResult
-                        {
-                            Delta = message,
-                            IsComplete = false,
-                            RawResponse = string.Empty // Raw response tracking would need to be implemented
-                        };
+                        var partialResponse = _parser.GetPartialResponse();
+                        yield return partialResponse.CreateChatCompletionResponse(
+                            messages,
+                            request,
+                            CompletionObjectType.ChatCompletionChunk,
+                            null);
                     }
                     else
                     {
@@ -175,28 +179,8 @@ public class StreamingInferenceEngine
 
             if (toolResultMessage != null)
             {
-                var assistantToolCallMessage = new ChatMessage
-                {
-                    Role = ChatRole.Assistant,
-                    Content = null,
-                    ToolCalls = new List<ToolCall>
-                    {
-                        new ToolCall
-                        {
-                            Type = ToolType.Function,
-                            Function = new FunctionCall
-                            {
-                                Name = completeMessages.ToolCall.Recipient,
-                                Namespace = completeMessages.ToolCall.Namespace,
-                                Arguments = completeMessages.ToolCall.Arguments ?? "{}"
-                            }
-                        }
-                    }
-                };
-
-                // Build new message list with original messages + assistant tool call + tool results
                 var continuedMessages = new List<ChatMessage>(messages);
-                continuedMessages.Add(assistantToolCallMessage);
+                continuedMessages.AddRange(completeMessages.Messages.ToChatMessages());
                 continuedMessages.Add(toolResultMessage);
 
                 _logger.LogInformation("Continuing inference with tool results");
@@ -216,20 +200,15 @@ public class StreamingInferenceEngine
             }
         }
 
-        // Apply response format validation if needed
-        if (request.ResponseFormat != null)
-        {
-            // Note: Response format processing would need to be implemented for HarmonyResponse
-            // For now, we'll skip this as it requires access to content that may be in channels
-        }
-
         // Send final result
-        yield return new StreamingInferenceResult
-        {
-            HarmonyResponse = completeMessages,
-            IsComplete = true,
-            RawResponse = string.Empty // Raw response tracking would need to be implemented
-        };
+        yield return completeMessages.CreateChatCompletionResponse(
+                        messages,
+                        request,
+                        CompletionObjectType.ChatCompletion,
+                        "stop",
+                        _parser.ReasoningTokens,
+                        LLamaUtilities.EstimateTokens(formattedPrompt),
+                        _parser.CompletionTokens);
     }
 
     private LLama.Sampling.Grammar? BuildResponseFormatGrammar(ResponseFormat responseFormat)
@@ -376,8 +355,8 @@ public class StreamingInferenceEngine
 /// </summary>
 public class StreamingInferenceResult
 {
-    public HarmonyMessage? Delta { get; set; }
-    public HarmonyResponse? HarmonyResponse { get; set; }
+    public ChatCompletionResponse Response { get; set; }
     public bool IsComplete { get; set; }
     public string RawResponse { get; set; } = string.Empty;
+    public int TokenCount { get; set; }
 }

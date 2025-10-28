@@ -6,7 +6,7 @@ namespace SharpAI.Services.Harmony;
 
 /// <summary>
 /// Handles browser tool function calls by routing them to the appropriate BrowserService methods.
-/// Supports search, open, and find operations with both regular and JSON response formats.
+/// Supports search, open, and find operations with markdown response formats.
 /// </summary>
 public class BrowserToolHandler
 {
@@ -38,10 +38,8 @@ public class BrowserToolHandler
         {
             return functionName switch
             {
-                "search" => await HandleSearchJsonAsync(arguments),
-                "searchjson" => await HandleSearchJsonAsync(arguments),
-                "open" => await HandleOpenJsonAsync(arguments),
-                "openjson" => await HandleOpenJsonAsync(arguments),
+                "search" => await HandleSearchAsync(arguments),
+                "open" => await HandleOpenAsync(arguments),
                 "find" => await HandleFindAsync(arguments),
                 _ => $"Error: Unknown browser function '{functionName}'"
             };
@@ -54,37 +52,37 @@ public class BrowserToolHandler
     }
 
     /// <summary>
-    /// Handles JSON search function calls.
+    /// Handles search function calls.
     /// </summary>
     /// <param name="arguments">JSON arguments for search</param>
-    /// <returns>JSON-formatted search results</returns>
-    private async Task<string> HandleSearchJsonAsync(string arguments)
+    /// <returns>Markdown-formatted search results</returns>
+    private async Task<string> HandleSearchAsync(string arguments)
     {
         var args = JsonSerializer.Deserialize<BrowserSearchArgs>(arguments);
         if (args == null)
         {
-            _logger.LogWarning("Invalid JSON search arguments provided");
-            return JsonSerializer.Serialize(new { error = "Invalid search arguments" });
+            _logger.LogWarning("Invalid search arguments provided");
+            return "Error: Invalid search arguments";
         }
 
-        return await _browserService.SearchJsonAsync(args);
+        return await _browserService.SearchAsync(args);
     }
 
     /// <summary>
-    /// Handles JSON page open function calls.
+    /// Handles page open function calls.
     /// </summary>
     /// <param name="arguments">JSON arguments for opening a page</param>
-    /// <returns>JSON-formatted page content</returns>
-    private async Task<string> HandleOpenJsonAsync(string arguments)
+    /// <returns>Markdown-formatted page content</returns>
+    private async Task<string> HandleOpenAsync(string arguments)
     {
         var args = JsonSerializer.Deserialize<BrowserOpenArgs>(arguments);
         if (args == null)
         {
-            _logger.LogWarning("Invalid JSON open arguments provided");
-            return JsonSerializer.Serialize(new { error = "Invalid open arguments" });
+            _logger.LogWarning("Invalid open arguments provided");
+            return "Error: Invalid open arguments";
         }
 
-        return await _browserService.OpenJsonAsync(args);
+        return await _browserService.OpenAsync(args);
     }
 
     /// <summary>
