@@ -85,6 +85,8 @@ public class HarmonyParser : IDisposable
                 _parserState.ParseState = HarmonyParseState.WaitingForRole;
                 _parserState.CurrentRole = null;
                 _parserState.CurrentChannel = null;
+                _parserState.CurrentRecipient = null;
+                _parserState.HasSentToolCallMetadata = false; // Reset tool call metadata flag
                 _parserState.RoleHeaderText.Clear(); // Reset role header accumulator
                 break;
 
@@ -236,17 +238,48 @@ public class HarmonyParser : IDisposable
                     delta.Role = _currentMessage.Role;
                     delta.Content = token;
                     
-                    switch (_parserState.CurrentChannel)
+                    // Check if we're in a tool call scenario (recipient is set)
+                    if (!string.IsNullOrEmpty(_parserState.CurrentRecipient))
                     {
-                        case HarmonyChannel.Final:
-                            delta.FinalContent = token;
-                            break;
-                        case HarmonyChannel.Analysis:
-                            delta.ReasoningContent = token;
-                            break;
-                        case HarmonyChannel.Commentary:
-                            delta.CommentaryContent = token;
-                            break;
+                        // This content is tool call arguments
+                        if (!_parserState.HasSentToolCallMetadata)
+                        {
+                            // First token for this tool call - include metadata
+                            delta.ToolCall = new HarmonyToolCall
+                            {
+                                Recipient = _parserState.CurrentRecipient,
+                                ToolName = ExtractToolNameFromRecipient(_parserState.CurrentRecipient),
+                                Namespace = ExtractNamespaceFromRecipient(_parserState.CurrentRecipient),
+                                Arguments = token, // This is the first argument token
+                                ConstraintType = _parserState.ConstraintType
+                            };
+                            _parserState.HasSentToolCallMetadata = true;
+                        }
+                        else
+                        {
+                            // Subsequent tokens - only include arguments
+                            delta.ToolCall = new HarmonyToolCall
+                            {
+                                Recipient = _parserState.CurrentRecipient,
+                                Arguments = token // Only the incremental argument token
+                            };
+                        }
+                    }
+                    else
+                    {
+                        // Regular content, map to appropriate channel
+                        switch (_parserState.CurrentChannel)
+                        {
+                            case HarmonyChannel.Final:
+                                delta.FinalContent = token;
+                                break;
+                            case HarmonyChannel.Analysis:
+                                delta.ReasoningContent = token;
+                                break;
+                            case HarmonyChannel.Commentary:
+                                delta.CommentaryContent = token;
+                                break;
+                        }
                     }
                 }
                 else if (_currentMessage.Role != HarmonyRole.Assistant)
@@ -475,6 +508,7 @@ public class HarmonyParser : IDisposable
         public StringBuilder ChannelHeaderText { get; set; } = new StringBuilder();
         public StringBuilder RoleHeaderText { get; set; } = new StringBuilder();
         public StringBuilder ConstraintTypeText { get; set; } = new StringBuilder();
+        public bool HasSentToolCallMetadata { get; set; } = false; // Track if we've sent initial tool call info
     }
 
     private enum HarmonyParseState

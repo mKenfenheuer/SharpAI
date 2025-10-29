@@ -102,9 +102,12 @@ namespace SharpAI.Api.Chat
         /// <returns>A complete chat completion response</returns>
         private async Task<IActionResult> HandleNonStreamingResponse(ChatCompletionRequest request)
         {
+            CancellationTokenSource cts = new CancellationTokenSource();
+            Request.HttpContext.RequestAborted.Register(() => cts.Cancel());
+                
             ChatCompletionResponse? response = null;
 
-            await foreach (var result in _llamaService.GenerateChatCompletionAsync(request))
+            await foreach (var result in _llamaService.GenerateChatCompletionAsync(request, cts.Token))
             {
                 response = result;
             }
@@ -125,12 +128,15 @@ namespace SharpAI.Api.Chat
             Response.Headers.Add("Cache-Control", "no-cache");
             Response.Headers.Add("Connection", "keep-alive");
 
+            CancellationTokenSource cts = new CancellationTokenSource();
+            Request.HttpContext.RequestAborted.Register(() => cts.Cancel());
+
             try
             {
                 bool isFirstChunk = true;
                 string? streamId = null;
 
-                await foreach (var chunk in _llamaService.GenerateChatCompletionAsync(request))
+                await foreach (var chunk in _llamaService.GenerateChatCompletionAsync(request, cts.Token))
                 {
                     // Use the same ID for all chunks in this stream
                     streamId ??= chunk.Id;
@@ -184,7 +190,9 @@ namespace SharpAI.Api.Chat
                                 {
                                     toolCallDelta.Function = new FunctionCallDelta
                                     {
-                                        Name = toolCall.Function.Name,
+                                        Name = toolCall.Function.Namespace != "functions" ? 
+                                            $"{toolCall.Function.Namespace}.{toolCall.Function.Name}" : 
+                                            toolCall.Function.Name,
                                         Arguments = toolCall.Function.Arguments
                                     };
                                 }
@@ -233,6 +241,7 @@ namespace SharpAI.Api.Chat
                 _logger.LogError(ex, "Error during streaming chat completion");
                 var errorResponse = new { error = new { message = "Stream error", type = "internal_error" } };
                 var errorJson = JsonSerializer.Serialize(errorResponse);
+                cts.Cancel();
                 await Response.WriteAsync($"data: {errorJson}\n\n");
                 await Response.Body.FlushAsync();
             }

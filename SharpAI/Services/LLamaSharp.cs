@@ -38,7 +38,7 @@ public class LLamaSharpService : IDisposable
     /// </summary>
     /// <param name="request">Chat completion request</param>
     /// <returns>Chat completion response</returns>
-    public async IAsyncEnumerable<ChatCompletionResponse> GenerateChatCompletionAsync(ChatCompletionRequest request)
+    public async IAsyncEnumerable<ChatCompletionResponse> GenerateChatCompletionAsync(ChatCompletionRequest request, CancellationToken token)
     {
         using var scope = _serviceProvider.CreateScope();
         var streamingEngine = scope.ServiceProvider.GetRequiredService<StreamingInferenceEngine>();
@@ -80,7 +80,7 @@ public class LLamaSharpService : IDisposable
         ChatCompletionResponse? finalResponse = null;
         var reasoningTokens = 0;
 
-        await foreach (var result in streamingEngine.GenerateStreamAsync(allMessages, request, modelInstance, inferenceParams))
+        await foreach (var result in streamingEngine.GenerateStreamAsync(allMessages, request, modelInstance, inferenceParams, cancellationToken: token))
         {
             yield return result;
         }

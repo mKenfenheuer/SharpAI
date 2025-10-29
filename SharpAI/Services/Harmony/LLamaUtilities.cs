@@ -425,13 +425,15 @@ public static class LLamaUtilities
     /// <param name="request">Chat completion request</param>
     /// <param name="finishReason">Finish reason for the chunk (null for intermediate chunks)</param>
     /// <param name="isFirstChunk">Whether this is the first chunk in the stream</param>
+    /// <param name="activeToolCalls">Dictionary mapping tool call recipients to their IDs for consistency</param>
     /// <returns>Streaming chat completion response with delta structure</returns>
     public static ChatCompletionStreamingResponse CreateStreamingResponseFromDelta(
         this HarmonyDelta delta,
         IEnumerable<ChatMessage> promptMessages,
         ChatCompletionRequest request,
         string? finishReason = null,
-        bool isFirstChunk = false)
+        bool isFirstChunk = false,
+        Dictionary<string, string>? activeToolCalls = null)
     {
         var responseDelta = new ChatCompletionDelta();
         var choices = new List<ChatCompletionStreamingChoice>();
@@ -461,16 +463,26 @@ public static class LLamaUtilities
         // Handle tool calls
         if (delta.ToolCall != null)
         {
+            var toolCallId = activeToolCalls?.GetValueOrDefault(delta.ToolCall.Recipient) ?? Guid.NewGuid().ToString();
+            var isFirstToolCallChunk = !string.IsNullOrEmpty(delta.ToolCall.ToolName); // Has metadata = first chunk
+            
             responseDelta.ToolCalls = new List<ToolCallDelta>
             {
                 new ToolCallDelta
                 {
                     Index = 0,
-                    Id = Guid.NewGuid().ToString(),
-                    Type = "function",
+                    // Only provide ID and type for the first token of a tool call
+                    Id = isFirstToolCallChunk ? toolCallId : null,
+                    Type = isFirstToolCallChunk ? "function" : null,
                     Function = new FunctionCallDelta
                     {
-                        Name = delta.ToolCall.ToolName,
+                        // Only provide name for the first token of a tool call
+                        // Include namespace in name if it's not "functions"
+                        Name = isFirstToolCallChunk ? 
+                            (delta.ToolCall.Namespace != "functions" ? 
+                                $"{delta.ToolCall.Namespace}.{delta.ToolCall.ToolName}" : 
+                                delta.ToolCall.ToolName) : null,
+                        // Always provide the argument delta
                         Arguments = delta.ToolCall.Arguments ?? ""
                     }
                 }

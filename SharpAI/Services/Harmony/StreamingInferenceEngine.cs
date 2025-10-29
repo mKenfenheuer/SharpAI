@@ -64,6 +64,7 @@ public class StreamingInferenceEngine
         // Pass the predefined next turn role to the parser
         var nextTurnToken = new[] { "<|start|>", "assistant" };
         var tokenCount = 0;
+        var activeToolCalls = new Dictionary<string, string>(); // recipient -> tool call ID mapping
 
         foreach (var t in nextTurnToken)
         {
@@ -99,12 +100,23 @@ public class StreamingInferenceEngine
 
             if (delta != null && delta.HasNewContent)
             {
+                // Handle tool call ID consistency
+                if (delta.ToolCall != null)
+                {
+                    var recipient = delta.ToolCall.Recipient;
+                    if (!activeToolCalls.ContainsKey(recipient))
+                    {
+                        activeToolCalls[recipient] = Guid.NewGuid().ToString();
+                    }
+                }
+
                 // Create streaming response from delta
                 var streamingResponse = delta.CreateStreamingResponseFromDelta(
                     messages,
                     request,
                     null, // No finish reason for intermediate chunks
-                    false);
+                    false,
+                    activeToolCalls);
                 
                 // Convert streaming response to ChatCompletionResponse for compatibility
                 yield return new ChatCompletionResponse
@@ -128,7 +140,8 @@ public class StreamingInferenceEngine
                                 Type = Enum.TryParse<ToolType>(tc.Type, true, out var type) ? type : ToolType.Function,
                                 Function = tc.Function != null ? new FunctionCall
                                 {
-                                    Name = tc.Function.Name ?? "",
+                                    Name = ParseFunctionName(tc.Function.Name),
+                                    Namespace = ParseFunctionNamespace(tc.Function.Name),
                                     Arguments = tc.Function.Arguments ?? ""
                                 } : null
                             }).ToList()
@@ -174,12 +187,23 @@ public class StreamingInferenceEngine
 
                 if (delta != null && delta.HasNewContent)
                 {
+                    // Handle tool call ID consistency
+                    if (delta.ToolCall != null)
+                    {
+                        var recipient = delta.ToolCall.Recipient;
+                        if (!activeToolCalls.ContainsKey(recipient))
+                        {
+                            activeToolCalls[recipient] = Guid.NewGuid().ToString();
+                        }
+                    }
+
                     // Create streaming response from delta
                     var streamingResponse = delta.CreateStreamingResponseFromDelta(
                         messages,
                         request,
                         null, // No finish reason for intermediate chunks
-                        false);
+                        false,
+                        activeToolCalls);
                     
                     // Convert streaming response to ChatCompletionResponse for compatibility
                     yield return new ChatCompletionResponse
@@ -203,7 +227,8 @@ public class StreamingInferenceEngine
                                     Type = Enum.TryParse<ToolType>(tc.Type, true, out var type) ? type : ToolType.Function,
                                     Function = tc.Function != null ? new FunctionCall
                                     {
-                                        Name = tc.Function.Name ?? "",
+                                        Name = ParseFunctionName(tc.Function.Name),
+                                        Namespace = ParseFunctionNamespace(tc.Function.Name),
                                         Arguments = tc.Function.Arguments ?? ""
                                     } : null
                                 }).ToList()
@@ -404,6 +429,54 @@ public class StreamingInferenceEngine
         }
 
         return content.ToString().Trim();
+    }
+
+    /// <summary>
+    /// Parses the function name from a potentially namespaced function name.
+    /// </summary>
+    /// <param name="fullName">The full function name, potentially in format "namespace.function"</param>
+    /// <returns>The function name without namespace</returns>
+    private static string ParseFunctionName(string? fullName)
+    {
+        if (string.IsNullOrEmpty(fullName))
+            return "";
+
+        // Only extract namespace if it starts with browser. or python.
+        if (fullName.StartsWith("browser."))
+        {
+            return fullName.Substring("browser.".Length);
+        }
+        else if (fullName.StartsWith("python."))
+        {
+            return fullName.Substring("python.".Length);
+        }
+
+        // Otherwise, the entire name is the function name
+        return fullName;
+    }
+
+    /// <summary>
+    /// Parses the namespace from a potentially namespaced function name.
+    /// </summary>
+    /// <param name="fullName">The full function name, potentially in format "namespace.function"</param>
+    /// <returns>The namespace, defaulting to "functions" if not specified or invalid</returns>
+    private static string ParseFunctionNamespace(string? fullName)
+    {
+        if (string.IsNullOrEmpty(fullName))
+            return "functions";
+
+        // Only extract namespace if it starts with browser. or python.
+        if (fullName.StartsWith("browser."))
+        {
+            return "browser";
+        }
+        else if (fullName.StartsWith("python."))
+        {
+            return "python";
+        }
+
+        // Otherwise, assume functions namespace
+        return "functions";
     }
 }
 
