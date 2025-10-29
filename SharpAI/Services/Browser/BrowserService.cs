@@ -7,32 +7,6 @@ using SharpAI.Models.Browser;
 namespace SharpAI.Services.Browser;
 
 /// <summary>
-/// Represents a search session with its results for later reference.
-/// </summary>
-public class SearchSession
-{
-    /// <summary>
-    /// Unique identifier for this search session.
-    /// </summary>
-    public int Id { get; set; }
-    
-    /// <summary>
-    /// The search query that was executed.
-    /// </summary>
-    public string Query { get; set; } = string.Empty;
-    
-    /// <summary>
-    /// The search results from this session.
-    /// </summary>
-    public List<BraveSearchResult> Results { get; set; } = new();
-    
-    /// <summary>
-    /// When this search session was created.
-    /// </summary>
-    public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
-}
-
-/// <summary>
 /// Provides browser functionality including web search and page content retrieval.
 /// Integrates with Brave Search API for web search capabilities and maintains page cache for navigation.
 /// </summary>
@@ -42,11 +16,7 @@ public class BrowserService
     private readonly ILogger<BrowserService> _logger;
     private readonly BraveSearchOptions _braveOptions;
     private readonly Dictionary<int, BrowserPage> _pages = new();
-    private readonly Dictionary<int, string> _linkIdToUrlMapping = new();
-    private readonly List<BraveSearchResult> _lastSearchResults = new();
-    private readonly Dictionary<int, SearchSession> _searchSessions = new();
     private int _nextCursor = 1;
-    private int _nextSearchSessionId = 1;
 
     /// <summary>
     /// Initializes a new instance of the BrowserService.
@@ -62,10 +32,10 @@ public class BrowserService
     }
 
     /// <summary>
-    /// Performs a web search and returns results in markdown format.
+    /// Performs a web search and returns results in JSON format.
     /// </summary>
     /// <param name="args">Search parameters including query and result count</param>
-    /// <returns>Markdown-formatted search results or error message</returns>
+    /// <returns>JSON-formatted search results or error message</returns>
     public async Task<string> SearchAsync(BrowserSearchArgs args)
     {
         _logger.LogInformation("Performing web search for query: {Query}", args.Query);
@@ -83,29 +53,13 @@ public class BrowserService
             if (results?.Web?.Results != null)
             {
                 var searchResults = results.Web.Results.Take(args.TopN ?? 10).ToList();
+                _logger.LogInformation("Search completed successfully, returned {Count} results", searchResults.Count);
                 
-                // Create a new search session
-                var searchSession = new SearchSession
-                {
-                    Id = _nextSearchSessionId++,
-                    Query = args.Query,
-                    Results = searchResults
-                };
-                _searchSessions[searchSession.Id] = searchSession;
-                
-                // Store the complete search results for later reference
-                _lastSearchResults.Clear();
-                _lastSearchResults.AddRange(searchResults);
-
-                // Store URL mapping for later use in open function
-                UpdateLinkIdMapping(searchResults);
-                _logger.LogInformation("Search completed successfully, returned {Count} results in session {SessionId}", searchResults.Count, searchSession.Id);
-                
-                // Return results in markdown format
+                // Return results in JSON format
                 return FormatBraveSearchResults(results, args.TopN ?? 10);
             }
 
-            return "No search results found.";
+            return JsonSerializer.Serialize(new { message = "No search results found.", results = new object[0] }, new JsonSerializerOptions { WriteIndented = true });
         }
         catch (Exception ex)
         {
@@ -118,8 +72,9 @@ public class BrowserService
     /// Opens a web page and returns content in markdown format, or scrolls to a location on an existing page.
     /// </summary>
     /// <param name="args">Open parameters including URL/ID, cursor, and location</param>
+    /// <param name="lastResultMessage">Last message containing search results to resolve link IDs</param>
     /// <returns>Markdown-formatted page content or error message</returns>
-    public async Task<string> OpenAsync(BrowserOpenArgs args)
+    public async Task<string> OpenAsync(BrowserOpenArgs args, Models.ChatMessage? lastResultMessage)
     {
         _logger.LogInformation("Opening page for markdown response - Id: {Id}, Cursor: {Cursor}, Location: {Loc}", args.Id, args.Cursor, args.Loc);
 
@@ -133,20 +88,18 @@ public class BrowserService
                 url = urlString;
                 _logger.LogDebug("Using direct URL for markdown: {Url}", url);
             }
-            else if (args.Id is int linkId && linkId > 0)
+            else if (args.Id is JsonElement idElem && idElem.ValueKind == JsonValueKind.Number)
             {
-                // Try to get URL from stored search results first (more reliable)
-                if (linkId <= _lastSearchResults.Count)
+                int linkId = idElem.GetInt32();
+                if (linkId > 0)
                 {
-                    var searchResult = _lastSearchResults[linkId - 1]; // Convert to 0-based index
-                    url = searchResult.Url;
-                    _logger.LogDebug("Resolved link ID {LinkId} to URL from stored search results: {Url}", linkId, url);
-                }
-                else
-                {
-                    // Fallback to the old mapping method
-                    url = GetUrlFromLinkId(linkId);
-                    _logger.LogDebug("Resolved link ID {LinkId} to URL using fallback method: {Url}", linkId, url);
+                    // Extract URL from lastResultMessage search results
+                    url = ExtractUrlFromSearchResults(linkId, lastResultMessage);
+                    if (string.IsNullOrEmpty(url))
+                    {
+                        return $"Error: Could not resolve link ID {linkId}. No valid search results found in last message.";
+                    }
+                    _logger.LogDebug("Resolved link ID {LinkId} to URL from search results: {Url}", linkId, url);
                 }
             }
             else if (args.Cursor.HasValue && args.Cursor > 0 && _pages.ContainsKey(args.Cursor.Value) && args.Id == null)
@@ -188,98 +141,10 @@ public class BrowserService
 
     /// <summary>
     /// Searches for a pattern within a loaded page.
-    /// <summary>
-    /// Gets search results from a specific search session in markdown format.
-    /// </summary>
-    /// <param name="sessionId">The search session ID</param>
-    /// <returns>Markdown-formatted search results from the session or error message</returns>
-    public string GetSearchSession(int sessionId)
-    {
-        _logger.LogInformation("Retrieving search session: {SessionId}", sessionId);
-
-        try
-        {
-            if (!_searchSessions.TryGetValue(sessionId, out var session))
-            {
-                return $"Error: Search session {sessionId} not found.";
-            }
-
-            var formatted = new List<string>
-            {
-                $"Search Session {session.Id}: \"{session.Query}\"",
-                $"Created: {session.CreatedAt:yyyy-MM-dd HH:mm:ss}",
-                $"Found {session.Results.Count} search results:",
-                ""
-            };
-
-            for (int i = 0; i < session.Results.Count; i++)
-            {
-                var result = session.Results[i];
-                var linkId = i + 1;
-                
-                formatted.Add($"【{linkId}†{result.Url}】");
-                formatted.Add($"**{result.Title}**");
-                formatted.Add(result.Description);
-                formatted.Add("");
-            }
-
-            return string.Join("\n", formatted);
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "Error retrieving search session: {SessionId}", sessionId);
-            return $"Error: Failed to retrieve search session: {ex.Message}";
-        }
-    }
-
-    /// <summary>
-    /// Gets a list of all available search sessions in markdown format.
-    /// </summary>
-    /// <returns>Markdown-formatted list of search sessions</returns>
-    public string GetSearchSessions()
-    {
-        _logger.LogInformation("Retrieving all search sessions");
-
-        try
-        {
-            var sessions = _searchSessions.Values
-                .OrderByDescending(s => s.CreatedAt)
-                .ToList();
-
-            if (!sessions.Any())
-            {
-                return "No search sessions found.";
-            }
-
-            var formatted = new List<string>
-            {
-                $"Found {sessions.Count} search session(s):",
-                ""
-            };
-
-            foreach (var session in sessions)
-            {
-                formatted.Add($"**Session {session.Id}**: \"{session.Query}\"");
-                formatted.Add($"  - Created: {session.CreatedAt:yyyy-MM-dd HH:mm:ss}");
-                formatted.Add($"  - Results: {session.Results.Count}");
-                formatted.Add("");
-            }
-
-            return string.Join("\n", formatted);
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "Error retrieving search sessions");
-            return $"Error: Failed to retrieve search sessions: {ex.Message}";
-        }
-    }
-
-    /// <summary>
-    /// Searches for a pattern within a loaded page.
     /// </summary>
     /// <param name="args">Find parameters including pattern and cursor</param>
     /// <returns>Formatted search results or error message</returns>
-    public Task<string> FindAsync(BrowserFindArgs args)
+    public Task<string> FindAsync(BrowserFindArgs args, Models.ChatMessage? lastResultMessage)
     {
         _logger.LogInformation("Searching for pattern '{Pattern}' in page with cursor: {Cursor}", args.Pattern, args.Cursor);
 
@@ -379,65 +244,93 @@ public class BrowserService
     }
 
     /// <summary>
-    /// Formats Brave Search API results into a readable text format.
+    /// Extracts URL from search results in lastResultMessage by link ID.
+    /// </summary>
+    /// <param name="linkId">The link ID to resolve</param>
+    /// <param name="lastResultMessage">Message containing JSON search results</param>
+    /// <returns>URL corresponding to the link ID, or null if not found</returns>
+    private string? ExtractUrlFromSearchResults(int linkId, Models.ChatMessage? lastResultMessage)
+    {
+        if (lastResultMessage?.Content == null)
+        {
+            _logger.LogWarning("No last result message provided for link ID resolution");
+            return null;
+        }
+
+        try
+        {
+            // Try to parse the content as SearchResponse model
+            var searchResponse = JsonSerializer.Deserialize<SearchResponse>(lastResultMessage.Content);
+            
+            if (searchResponse?.Results != null)
+            {
+                // Find the result with matching ID (1-based)
+                var targetResult = searchResponse.Results.FirstOrDefault(r => r.Id == linkId);
+                
+                if (targetResult != null)
+                {
+                    return targetResult.Url;
+                }
+            }
+            
+            _logger.LogWarning("Could not find result with ID {LinkId} in search results", linkId);
+            return null;
+        }
+        catch (JsonException ex)
+        {
+            _logger.LogWarning(ex, "Failed to parse search results JSON for link ID {LinkId}", linkId);
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Formats Brave Search API results into a JSON format.
     /// </summary>
     /// <param name="response">Brave search response</param>
     /// <param name="requestedCount">Number of results requested</param>
-    /// <returns>Formatted search results</returns>
+    /// <returns>JSON-formatted search results</returns>
     private string FormatBraveSearchResults(BraveSearchResponse? response, int requestedCount)
     {
         if (response?.Web?.Results == null || !response.Web.Results.Any())
         {
-            return "No search results found.";
+            var emptyResponse = new SearchResponse
+            {
+                Message = "No search results found.",
+                TotalResults = 0,
+                Results = new List<SearchResultItem>()
+            };
+            return JsonSerializer.Serialize(emptyResponse, new JsonSerializerOptions { WriteIndented = true });
         }
 
         var results = response.Web.Results.Take(requestedCount).ToList();
-        var formatted = new List<string>
+        
+        // Create search result items using the proper model
+        var searchResultItems = results.Select((result, index) => new SearchResultItem
         {
-            $"Found {results.Count} search results:",
-            ""
+            Id = index + 1,
+            Title = result.Title,
+            Description = result.Description,
+            Url = result.Url
+        }).ToList();
+
+        var searchResponse = new SearchResponse
+        {
+            Message = $"Found {results.Count} search results",
+            TotalResults = results.Count,
+            Results = searchResultItems
         };
 
-        for (int i = 0; i < results.Count; i++)
-        {
-            var result = results[i];
-            var linkId = i + 1;
-            
-            formatted.Add($"【{linkId}†{result.Url}】");
-            formatted.Add($"**{result.Title}**");
-            formatted.Add(result.Description);
-            formatted.Add("");
-        }
-
-        // Store URL mapping for later use in open function
-        UpdateLinkIdMapping(results);
-
-        return string.Join("\n", formatted);
-    }
-
-    /// <summary>
-    /// Updates the internal mapping of link IDs to URLs from search results.
-    /// This is maintained for backward compatibility with the old mapping system.
-    /// </summary>
-    /// <param name="results">Search results to extract URLs from</param>
-    private void UpdateLinkIdMapping(List<BraveSearchResult> results)
-    {
-        // Clear previous mappings and store new ones
-        _linkIdToUrlMapping.Clear();
+        // Store URL mapping for later use in open function - now handled via lastResultMessage
         
-        for (int i = 0; i < results.Count; i++)
-        {
-            var linkId = i + 1;
-            _linkIdToUrlMapping[linkId] = results[i].Url;
-        }
-        _logger.LogDebug("Updated link ID mapping with {Count} URLs", results.Count);
+        return JsonSerializer.Serialize(searchResponse, new JsonSerializerOptions { WriteIndented = true });
     }
 
     /// <summary>
     /// Fetches content from a web page URL.
     /// </summary>
     /// <param name="url">URL to fetch</param>
-    /// <returns>Cleaned HTML content or simulated content if fetch fails</returns>
+    /// <returns>Cleaned HTML content</returns>
+    /// <exception cref="HttpRequestException">Thrown when the web page cannot be fetched</exception>
     private async Task<string> FetchPageContentAsync(string url)
     {
         try
@@ -448,18 +341,8 @@ public class BrowserService
         }
         catch (Exception ex)
         {
-            _logger.LogWarning(ex, "Failed to fetch content from URL: {Url}, returning simulated content", url);
-            // Return simulated content if actual fetch fails
-            return $@"
-<html>
-<head><title>Example Page</title></head>
-<body>
-<h1>Example Page Content</h1>
-<p>This is simulated content for the URL: {url}</p>
-<p>In a real implementation, this would be the actual web page content.</p>
-<p>The content would be cleaned and formatted for better readability.</p>
-</body>
-</html>";
+            _logger.LogError(ex, "Failed to fetch content from URL: {Url}", url);
+            throw new HttpRequestException($"Failed to fetch content from URL '{url}': {ex.Message}", ex);
         }
     }
 
@@ -610,30 +493,4 @@ public class BrowserService
         return string.Join("\n", lines);
     }
 
-    /// <summary>
-    /// Gets URL from link ID using the stored search results or mapping from search results.
-    /// </summary>
-    /// <param name="linkId">Link ID from search results</param>
-    /// <returns>Corresponding URL or fallback URL</returns>
-    private string GetUrlFromLinkId(int linkId)
-    {
-        // First try to get from stored search results (most reliable)
-        if (linkId > 0 && linkId <= _lastSearchResults.Count)
-        {
-            var searchResult = _lastSearchResults[linkId - 1]; // Convert to 0-based index
-            _logger.LogDebug("Retrieved URL from stored search results for ID {LinkId}: {Url}", linkId, searchResult.Url);
-            return searchResult.Url;
-        }
-        
-        // Fallback to the stored mapping from the last search results
-        if (_linkIdToUrlMapping.TryGetValue(linkId, out var url))
-        {
-            _logger.LogDebug("Retrieved URL from link mapping for ID {LinkId}: {Url}", linkId, url);
-            return url;
-        }
-        
-        // Last resort fallback for demo purposes
-        _logger.LogWarning("No URL found for link ID {LinkId}, using fallback", linkId);
-        return $"https://example.com/link-{linkId}";
-    }
 }

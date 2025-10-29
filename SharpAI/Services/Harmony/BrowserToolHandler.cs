@@ -30,7 +30,7 @@ public class BrowserToolHandler
     /// <param name="functionName">Name of the browser function to execute</param>
     /// <param name="arguments">JSON arguments for the function</param>
     /// <returns>Function execution result or error message</returns>
-    public async Task<string> HandleBrowserToolCall(string functionName, string arguments)
+    public async Task<string> HandleBrowserToolCall(string functionName, string arguments, IEnumerable<Models.ChatMessage> lastToolMessages)
     {
         _logger.LogInformation("Handling browser tool call: {FunctionName}", functionName);
 
@@ -39,8 +39,8 @@ public class BrowserToolHandler
             return functionName switch
             {
                 "search" => await HandleSearchAsync(arguments),
-                "open" => await HandleOpenAsync(arguments),
-                "find" => await HandleFindAsync(arguments),
+                "open" => await HandleOpenAsync(arguments, lastToolMessages.LastOrDefault(m => m.Name == "browser.search")),
+                "find" => await HandleFindAsync(arguments, lastToolMessages.LastOrDefault(m => m.Name == "browser.open")),
                 _ => $"Error: Unknown browser function '{functionName}'"
             };
         }
@@ -73,7 +73,7 @@ public class BrowserToolHandler
     /// </summary>
     /// <param name="arguments">JSON arguments for opening a page</param>
     /// <returns>Markdown-formatted page content</returns>
-    private async Task<string> HandleOpenAsync(string arguments)
+    private async Task<string> HandleOpenAsync(string arguments, Models.ChatMessage? chatMessage)
     {
         var args = JsonSerializer.Deserialize<BrowserOpenArgs>(arguments);
         if (args == null)
@@ -82,7 +82,7 @@ public class BrowserToolHandler
             return "Error: Invalid open arguments";
         }
 
-        return await _browserService.OpenAsync(args);
+        return await _browserService.OpenAsync(args, chatMessage);
     }
 
     /// <summary>
@@ -90,7 +90,7 @@ public class BrowserToolHandler
     /// </summary>
     /// <param name="arguments">JSON arguments for finding text</param>
     /// <returns>Find results</returns>
-    private async Task<string> HandleFindAsync(string arguments)
+    private async Task<string> HandleFindAsync(string arguments, Models.ChatMessage? chatMessage)
     {
         var args = JsonSerializer.Deserialize<BrowserFindArgs>(arguments);
         if (args == null)
@@ -99,7 +99,7 @@ public class BrowserToolHandler
             return "Error: Invalid find arguments";
         }
 
-        return await _browserService.FindAsync(args);
+        return await _browserService.FindAsync(args, chatMessage);
     }
 
     /// <summary>

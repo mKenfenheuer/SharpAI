@@ -158,3 +158,57 @@ public class BrowserFindResult
     /// </summary>
     public int Position { get; set; }
 }
+
+/// <summary>
+/// Represents a single search result item in the JSON response.
+/// </summary>
+public class SearchResultItem
+{
+    /// <summary>
+    /// Unique identifier for this search result (1-based index).
+    /// </summary>
+    [JsonPropertyName("id")]
+    public int Id { get; set; }
+
+    /// <summary>
+    /// The title of the web page or search result.
+    /// </summary>
+    [JsonPropertyName("title")]
+    public string Title { get; set; } = string.Empty;
+
+    /// <summary>
+    /// A description or snippet of the page content.
+    /// </summary>
+    [JsonPropertyName("description")]
+    public string Description { get; set; } = string.Empty;
+
+    /// <summary>
+    /// The URL of the web page.
+    /// </summary>
+    [JsonPropertyName("url")]
+    public string Url { get; set; } = string.Empty;
+}
+
+/// <summary>
+/// Represents the complete search response in JSON format.
+/// </summary>
+public class SearchResponse
+{
+    /// <summary>
+    /// A message describing the search results.
+    /// </summary>
+    [JsonPropertyName("message")]
+    public string Message { get; set; } = string.Empty;
+
+    /// <summary>
+    /// The total number of results returned.
+    /// </summary>
+    [JsonPropertyName("total_results")]
+    public int TotalResults { get; set; }
+
+    /// <summary>
+    /// The array of search result items.
+    /// </summary>
+    [JsonPropertyName("results")]
+    public List<SearchResultItem> Results { get; set; } = new();
+}

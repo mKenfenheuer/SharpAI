@@ -257,7 +257,7 @@ public class StreamingInferenceEngine
             if (BrowserToolHandler.IsBrowserToolCall(completeMessages.ToolCall.Recipient))
             {
                 _logger.LogInformation("Executing browser tool call");
-                toolResultMessage = await HandleBrowserToolCallAsync(completeMessages);
+                toolResultMessage = await HandleBrowserToolCallAsync(completeMessages, messages.Where(m => m.Role == ChatRole.Tool && m.Name.StartsWith("browser.")));
             }
 
             if (toolResultMessage != null)
@@ -362,7 +362,7 @@ public class StreamingInferenceEngine
     /// Executes browser tool calls and returns the results as ChatMessage objects.
     /// Browser tool calls are handled internally and their results are prepared for continued inference.
     /// </summary>
-    private async Task<ChatMessage> HandleBrowserToolCallAsync(HarmonyResponse harmonyResponse)
+    private async Task<ChatMessage> HandleBrowserToolCallAsync(HarmonyResponse harmonyResponse, IEnumerable<ChatMessage> lastToolMessages)
     {
         try
         {
@@ -370,7 +370,7 @@ public class StreamingInferenceEngine
             var toolCallId = Guid.NewGuid().ToString();
 
             var functionName = BrowserToolHandler.ExtractBrowserFunction(harmonyResponse.ToolCall.Recipient);
-            var result = await _browserHandler.HandleBrowserToolCall(functionName, harmonyResponse.ToolCall.Arguments);
+            var result = await _browserHandler.HandleBrowserToolCall(functionName, harmonyResponse.ToolCall.Arguments, lastToolMessages);
 
             // Create a tool result message
             var toolResultMessage = new ChatMessage
