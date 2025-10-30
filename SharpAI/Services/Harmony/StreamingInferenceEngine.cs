@@ -47,16 +47,19 @@ public class StreamingInferenceEngine
 
 
         // Check if tools are available and should be used
-        var shouldUseFunctions = request.Tools?.Any() == true &&
-                                 (request.ToolChoice != ToolChoice.None);
+        if (request.ToolChoice == ToolChoice.None)
+        {
+            request.Tools = null;
+        }
 
-        // Apply harmony format to the prompt
-        var formattedPrompt = _formatter.FormatPrompt(
+        var conversation = _formatter.ConvertToHarmonyConversation(
             messages,
-            shouldUseFunctions,
             request.ReasoningEffort ?? ReasoningEffortLevel.Low,
             request.Tools,
             request.ResponseFormat);
+
+        // Apply harmony format to the prompt
+        var formattedPrompt = _formatter.FormatHarmonyConversation(conversation);
 
         var rawResponseBuilder = new StringBuilder();
         // Generate response using the stateless executor
@@ -64,7 +67,6 @@ public class StreamingInferenceEngine
         // Pass the predefined next turn role to the parser
         var nextTurnToken = new[] { "<|start|>", "assistant" };
         var tokenCount = 0;
-        var activeToolCalls = new Dictionary<string, string>(); // recipient -> tool call ID mapping
 
         foreach (var t in nextTurnToken)
         {
@@ -77,174 +79,105 @@ public class StreamingInferenceEngine
         var executor = new StatelessExecutor(modelInstance.Weights!, modelInstance.Context!.Params);
 
         var continueWithGrammar = false;
+        var continueWithFunctionGrammar = false;
+        var hasContinued = false;
 
-        await foreach (var token in executor.InferAsync(formattedPrompt, inferenceParams))
+
+    startInference:
+
+        await foreach (var inferResponse in InferAsync(formattedPrompt, request, messages, executor, inferenceParams, continueWithFunctionGrammar || continueWithGrammar, cancellationToken))
         {
+            if (!hasContinued && (continueWithGrammar || continueWithFunctionGrammar))
+            {
+                hasContinued = true;
+            }
+
             if (cancellationToken.IsCancellationRequested)
             {
                 _logger.LogInformation("Streaming inference cancelled by user");
                 break;
             }
 
-            rawResponseBuilder.Append(token);
-            var delta = _parser.ParseToken(token);
-            tokenCount++;
-
-            if (request.ResponseFormat != null && _parser.IsInFinalContent)
+            if (inferResponse.ExitReason == InferExitReason.ParsingFailed)
             {
-                // We need to break here to apply response format validation using the grammar.
-                //TODO: Implement.
-                continueWithGrammar = true;
-                break;
-            }
+                _logger.LogError("Parsing failed during streaming inference. Aborting.");
 
-            if (delta != null && delta.HasNewContent)
-            {
-                // Handle tool call ID consistency
-                if (delta.ToolCall != null)
+                // We need to reset the parser state for continued inference
+                _parser.ResetParserState();
+
+                // Continue inference with tool results using recursive call
+                await foreach (var continuedResult in GenerateStreamAsync(
+                    messages, request, modelInstance, inferenceParams, cancellationToken))
                 {
-                    var recipient = delta.ToolCall.Recipient;
-                    if (!activeToolCalls.ContainsKey(recipient))
-                    {
-                        activeToolCalls[recipient] = Guid.NewGuid().ToString();
-                    }
+                    yield return continuedResult;
                 }
 
-                // Create streaming response from delta
-                var streamingResponse = delta.CreateStreamingResponseFromDelta(
-                    messages,
-                    request,
-                    null, // No finish reason for intermediate chunks
-                    false,
-                    activeToolCalls);
-                
-                // Convert streaming response to ChatCompletionResponse for compatibility
-                yield return new ChatCompletionResponse
-                {
-                    Id = streamingResponse.Id,
-                    Object = streamingResponse.Object,
-                    Created = streamingResponse.Created,
-                    Model = streamingResponse.Model,
-                    Choices = streamingResponse.Choices?.Select(c => new ChatCompletionChoice
-                    {
-                        Index = c.Index,
-                        Message = new ChatMessage
-                        {
-                            Role = c.Delta?.Role ?? ChatRole.Assistant,
-                            Content = c.Delta?.Content,
-                            Reasoning = c.Delta?.Reasoning,
-                            Commentary = c.Delta?.Commentary,
-                            ToolCalls = c.Delta?.ToolCalls?.Select(tc => new ToolCall
-                            {
-                                CallId = tc.Id ?? Guid.NewGuid().ToString(),
-                                Type = Enum.TryParse<ToolType>(tc.Type, true, out var type) ? type : ToolType.Function,
-                                Function = tc.Function != null ? new FunctionCall
-                                {
-                                    Name = ParseFunctionName(tc.Function.Name),
-                                    Namespace = ParseFunctionNamespace(tc.Function.Name),
-                                    Arguments = tc.Function.Arguments ?? ""
-                                } : null
-                            }).ToList()
-                        },
-                        FinishReason = c.FinishReason
-                    }).ToList() ?? new List<ChatCompletionChoice>(),
-                    Usage = streamingResponse.Usage
-                };
+                // Return early as the continued inference handles the final result
+                yield break;
             }
-            
-            if (_parser.IsComplete)
+            else if (inferResponse.ExitReason == InferExitReason.SwitchToGrammar)
             {
-                break;
+                if (_parser.IsInToolCallArguments)
+                {
+                    continueWithFunctionGrammar = true;
+                }
+                else
+                {
+                    continueWithGrammar = true;
+                }
+                break; // Exit the loop to switch to grammar-based inference
+            }
+            else
+            {
+                // Yield the chunked response
+                yield return inferResponse.Chunk;
             }
         }
 
-        if (continueWithGrammar)
+
+        if (continueWithGrammar && !hasContinued)
         {
             _logger.LogInformation("Continuing inference with grammar-based response format validation");
-
 
             inferenceParams.SamplingPipeline = LLamaUtilities.BuildSamplingPipeline(
                 request,
                 BuildResponseFormatGrammar(request.ResponseFormat!));
 
+            // Create a fresh stateless executor to avoid state contamination from previous inferences
+            executor = new StatelessExecutor(modelInstance.Weights!, modelInstance.Context!.Params);
+
+            formattedPrompt += rawResponseBuilder.ToString();
+
+            goto startInference;
+        }
+
+        if (continueWithFunctionGrammar && !hasContinued)
+        {
+            _logger.LogInformation("Continuing inference with grammar-based tool argument format validation");
+            var tools = conversation.SelectMany(m => m.Content)
+                        .Where(c => c.Tools != null)
+                        .SelectMany(c => c.Tools);
+            var tool = tools.FirstOrDefault(t => t.Name == _parser.ToolCallRecipient);
+
+            inferenceParams.SamplingPipeline = LLamaUtilities.BuildSamplingPipeline(
+                request,
+                BuildResponseFormatGrammar(new ResponseFormat
+                {
+                    Type = ResponseFormatType.JsonSchema,
+                    JsonSchema = tool.GetJsonSchema()
+                }));
+
 
             // Create a fresh stateless executor to avoid state contamination from previous inferences
             executor = new StatelessExecutor(modelInstance.Weights!, modelInstance.Context!.Params);
 
-            var prompt = formattedPrompt + rawResponseBuilder.ToString();
+            formattedPrompt += rawResponseBuilder.ToString();
 
-            await foreach (var token in executor.InferAsync(prompt, inferenceParams))
-            {
-                if (cancellationToken.IsCancellationRequested)
-                {
-                    _logger.LogInformation("Streaming inference cancelled by user");
-                    break;
-                }
-
-                rawResponseBuilder.Append(token);
-                var delta = _parser.ParseToken(token);
-                tokenCount++;
-
-                if (delta != null && delta.HasNewContent)
-                {
-                    // Handle tool call ID consistency
-                    if (delta.ToolCall != null)
-                    {
-                        var recipient = delta.ToolCall.Recipient;
-                        if (!activeToolCalls.ContainsKey(recipient))
-                        {
-                            activeToolCalls[recipient] = Guid.NewGuid().ToString();
-                        }
-                    }
-
-                    // Create streaming response from delta
-                    var streamingResponse = delta.CreateStreamingResponseFromDelta(
-                        messages,
-                        request,
-                        null, // No finish reason for intermediate chunks
-                        false,
-                        activeToolCalls);
-                    
-                    // Convert streaming response to ChatCompletionResponse for compatibility
-                    yield return new ChatCompletionResponse
-                    {
-                        Id = streamingResponse.Id,
-                        Object = streamingResponse.Object,
-                        Created = streamingResponse.Created,
-                        Model = streamingResponse.Model,
-                        Choices = streamingResponse.Choices?.Select(c => new ChatCompletionChoice
-                        {
-                            Index = c.Index,
-                            Message = new ChatMessage
-                            {
-                                Role = c.Delta?.Role ?? ChatRole.Assistant,
-                                Content = c.Delta?.Content,
-                                Reasoning = c.Delta?.Reasoning,
-                                Commentary = c.Delta?.Commentary,
-                                ToolCalls = c.Delta?.ToolCalls?.Select(tc => new ToolCall
-                                {
-                                    CallId = tc.Id ?? Guid.NewGuid().ToString(),
-                                    Type = Enum.TryParse<ToolType>(tc.Type, true, out var type) ? type : ToolType.Function,
-                                    Function = tc.Function != null ? new FunctionCall
-                                    {
-                                        Name = ParseFunctionName(tc.Function.Name),
-                                        Namespace = ParseFunctionNamespace(tc.Function.Name),
-                                        Arguments = tc.Function.Arguments ?? ""
-                                    } : null
-                                }).ToList()
-                            },
-                            FinishReason = c.FinishReason
-                        }).ToList() ?? new List<ChatCompletionChoice>(),
-                        Usage = streamingResponse.Usage
-                    };
-                }
-                
-                if (_parser.IsComplete)
-                {
-                    break;
-                }
-            }
+            goto startInference;
         }
+
+        Console.WriteLine($"Prompt: {formattedPrompt}");
+        Console.WriteLine($"Raw Response: {_parser.RawResponse}");
 
         var completeMessages = _parser.GetResponse();
         var rawResponse = rawResponseBuilder.ToString();
@@ -271,6 +204,15 @@ public class StreamingInferenceEngine
                 // We need to reset the parser state for continued inference
                 _parser.ResetParserState();
 
+                // We need to reset executor state as well
+
+
+                inferenceParams.SamplingPipeline = LLamaUtilities.BuildSamplingPipeline(
+                    request);
+
+                // Create a fresh stateless executor to avoid state contamination from previous inferences
+                executor = new StatelessExecutor(modelInstance.Weights!, modelInstance.Context!.Params);
+
                 // Continue inference with tool results using recursive call
                 await foreach (var continuedResult in GenerateStreamAsync(
                     continuedMessages, request, modelInstance, inferenceParams, cancellationToken))
@@ -292,6 +234,97 @@ public class StreamingInferenceEngine
                         _parser.ReasoningTokens,
                         LLamaUtilities.EstimateTokens(formattedPrompt),
                         _parser.CompletionTokens);
+    }
+
+    private async IAsyncEnumerable<InferResponse<ChatCompletionResponse>> InferAsync(string formattedPrompt, ChatCompletionRequest request, List<ChatMessage> messages, StatelessExecutor executor, InferenceParams inferenceParams, bool ignoreGrammarChange, CancellationToken cancellationToken)
+    {
+        await foreach (var token in executor.InferAsync(formattedPrompt, inferenceParams))
+        {
+            if (cancellationToken.IsCancellationRequested)
+            {
+                _logger.LogInformation("Streaming inference cancelled by user");
+                break;
+            }
+            var delta = _parser.ParseToken(token);
+
+            if (_parser.IsComplete && _parser.IsFailed)
+            {
+                yield return new InferResponse<ChatCompletionResponse>()
+                {
+                    ExitReason = InferExitReason.ParsingFailed
+                };
+                break;
+            }
+
+            if (_parser.IsInToolCallArguments && !ignoreGrammarChange)
+            {
+                yield return new InferResponse<ChatCompletionResponse>()
+                {
+                    ExitReason = InferExitReason.SwitchToGrammar
+                };
+                break;
+            }
+
+            if (_parser.HasConstraint && _parser.IsInFinalContent && !ignoreGrammarChange)
+            {
+                yield return new InferResponse<ChatCompletionResponse>()
+                {
+                    ExitReason = InferExitReason.SwitchToGrammar
+                };
+                break;
+            }
+
+            if (delta != null && delta.HasNewContent)
+            {
+                // Create streaming response from delta
+                var streamingResponse = delta.CreateStreamingResponseFromDelta(
+                    messages,
+                    request,
+                    null, // No finish reason for intermediate chunks
+                    false);
+
+                // Convert streaming response to ChatCompletionResponse for compatibility
+                yield return new InferResponse<ChatCompletionResponse>()
+                {
+                    Chunk = new ChatCompletionResponse
+                    {
+                        Id = streamingResponse.Id,
+                        Object = streamingResponse.Object,
+                        Created = streamingResponse.Created,
+                        Model = streamingResponse.Model,
+                        Choices = streamingResponse.Choices?.Select(c => new ChatCompletionChoice
+                        {
+                            Index = c.Index,
+                            Message = new ChatMessage
+                            {
+                                Role = c.Delta?.Role ?? ChatRole.Assistant,
+                                Content = c.Delta?.Content,
+                                Reasoning = c.Delta?.Reasoning,
+                                Commentary = c.Delta?.Commentary,
+                                ToolCalls = c.Delta?.ToolCalls?.Select(tc => new ToolCall
+                                {
+                                    CallId = tc.Id,
+                                    Type = Enum.TryParse<ToolType>(tc.Type, true, out var type) ? type : ToolType.Function,
+                                    Function = tc.Function != null ? new FunctionCall
+                                    {
+                                        Name = ParseFunctionName(tc.Function.Name),
+                                        Namespace = ParseFunctionNamespace(tc.Function.Name),
+                                        Arguments = tc.Function.Arguments ?? ""
+                                    } : null
+                                }).ToList()
+                            },
+                            FinishReason = c.FinishReason
+                        }).ToList() ?? new List<ChatCompletionChoice>(),
+                        Usage = streamingResponse.Usage
+                    }
+                };
+            }
+
+            if (_parser.IsComplete)
+            {
+                break;
+            }
+        }
     }
 
     private LLama.Sampling.Grammar? BuildResponseFormatGrammar(ResponseFormat responseFormat)
@@ -367,7 +400,7 @@ public class StreamingInferenceEngine
         try
         {
             // Generate an ID for this tool call
-            var toolCallId = Guid.NewGuid().ToString();
+            var toolCallId = harmonyResponse.ToolCall.Id;
 
             var functionName = BrowserToolHandler.ExtractBrowserFunction(harmonyResponse.ToolCall.Recipient);
             var result = await _browserHandler.HandleBrowserToolCall(functionName, harmonyResponse.ToolCall.Arguments, lastToolMessages);
@@ -478,6 +511,20 @@ public class StreamingInferenceEngine
         // Otherwise, assume functions namespace
         return "functions";
     }
+}
+
+internal enum InferExitReason
+{
+    None,
+    ParsingFailed,
+    SwitchToGrammar,
+    Completed
+}
+
+internal class InferResponse<T>
+{
+    public InferExitReason ExitReason { get; internal set; } = InferExitReason.None;
+    public ChatCompletionResponse Chunk { get; internal set; }
 }
 
 /// <summary>

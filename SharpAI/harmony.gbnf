@@ -1,0 +1,34 @@
+# harmony.gbnf
+# GBNF grammar for the OpenAI "Harmony" response format (channels, roles, messages, tool calls)
+
+root ::= analysisblock (commentaryblock? | commentarytoolcall?) (messageblock | messageblocktoolcall | messageblockconstraint)
+
+# Special Tokens
+
+START ::= "<|start|>"
+END ::= "<|end|>"
+MESSAGE ::= "<|message|>"
+CHANNEL ::= "<|channel|>"
+CONSTRAIN ::= "<|constrain|>"
+RETURN ::= "<|return|>"
+CALL ::= "<|call|>"
+
+# Generic message block: <|start|>{header}<|message|>{content}<|end|>
+analysisblock ::= START "assistant" CHANNEL "analysis" MESSAGE text END
+commentaryblock ::= START "assistant" CHANNEL "commentary" MESSAGE text END
+commentarytoolcall ::= START "assistant" CHANNEL "commentary to=" ("browser." | "python.") [A-Za-z_][A-Za-z0-9_-]* CONSTRAIN "json" MESSAGE text
+messageblock ::= START "assistant" CHANNEL "final" toolcall? MESSAGE text
+messageblocktoolcall ::= START "assistant" CHANNEL "final " constraint MESSAGE text
+messageblockconstraint ::= START "assistant" CHANNEL "final" toolcall? MESSAGE text
+
+constraint ::= CONSTRAIN constrainttype 
+
+toolcall ::= " to=" identification constraint
+
+constrainttype ::= identification | "json"
+
+# IDENT: alphanumeric plus underscore, can include dashes after first character
+identification ::= ([A-Za-z0-9_-] | ".")*
+
+# TEXT: any run of characters not containing '<', newlines allowed
+text ::= .*

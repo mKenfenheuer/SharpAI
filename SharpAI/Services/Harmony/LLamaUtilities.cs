@@ -118,13 +118,19 @@ public static class LLamaUtilities
             }
         }
 
-
+        // Load default Harmony grammar from "harmony.gbnf" if available
+        Grammar? harmonyGrammar = null;
+        var grammarPath = System.IO.Path.Combine(Environment.CurrentDirectory, "harmony.gbnf");
+        if (System.IO.File.Exists(grammarPath))
+        {
+            harmonyGrammar = new Grammar(File.ReadAllText(grammarPath), "root");
+        }
 
         var inferenceParams = new InferenceParams
         {
             MaxTokens = request.MaxTokens ?? int.MaxValue,
             AntiPrompts = new List<string>(antiPrompts),
-            SamplingPipeline = BuildSamplingPipeline(request),
+            SamplingPipeline = BuildSamplingPipeline(request, harmonyGrammar),
             DecodeSpecialTokens = true
         };
 
@@ -432,8 +438,7 @@ public static class LLamaUtilities
         IEnumerable<ChatMessage> promptMessages,
         ChatCompletionRequest request,
         string? finishReason = null,
-        bool isFirstChunk = false,
-        Dictionary<string, string>? activeToolCalls = null)
+        bool isFirstChunk = false)
     {
         var responseDelta = new ChatCompletionDelta();
         var choices = new List<ChatCompletionStreamingChoice>();
@@ -463,7 +468,6 @@ public static class LLamaUtilities
         // Handle tool calls
         if (delta.ToolCall != null)
         {
-            var toolCallId = activeToolCalls?.GetValueOrDefault(delta.ToolCall.Recipient) ?? Guid.NewGuid().ToString();
             var isFirstToolCallChunk = !string.IsNullOrEmpty(delta.ToolCall.ToolName); // Has metadata = first chunk
             
             responseDelta.ToolCalls = new List<ToolCallDelta>
@@ -472,7 +476,7 @@ public static class LLamaUtilities
                 {
                     Index = 0,
                     // Only provide ID and type for the first token of a tool call
-                    Id = isFirstToolCallChunk ? toolCallId : null,
+                    Id = delta.ToolCall.Id,
                     Type = isFirstToolCallChunk ? "function" : null,
                     Function = new FunctionCallDelta
                     {

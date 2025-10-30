@@ -49,12 +49,12 @@ public class BrowserService
             }
 
             var results = await CallBraveSearchApiAsync(args.Query, args.TopN ?? 10);
-            
+
             if (results?.Web?.Results != null)
             {
                 var searchResults = results.Web.Results.Take(args.TopN ?? 10).ToList();
                 _logger.LogInformation("Search completed successfully, returned {Count} results", searchResults.Count);
-                
+
                 // Return results in JSON format
                 return FormatBraveSearchResults(results, args.TopN ?? 10);
             }
@@ -81,34 +81,29 @@ public class BrowserService
         try
         {
             string url = "";
-            
+
             // Determine the URL to open
-            if (args.Id is string urlString)
+            if (args.Id is JsonElement idElem && idElem.ValueKind == JsonValueKind.String)
             {
+                string urlString = idElem.GetString() ?? "";
                 url = urlString;
                 _logger.LogDebug("Using direct URL for markdown: {Url}", url);
             }
-            else if (args.Id is JsonElement idElem && idElem.ValueKind == JsonValueKind.Number)
+            else if (args.Id is JsonElement idNumElem && idNumElem.ValueKind == JsonValueKind.Number)
             {
-                int linkId = idElem.GetInt32();
-                if (linkId > 0)
+                int linkId = idNumElem.GetInt32();
+                if (linkId < 0)
+                    linkId = args.Cursor ?? 0;
+                if (linkId < 0)
+                    linkId = args.Loc ?? 0;
+
+                // Extract URL from lastResultMessage search results
+                url = ExtractUrlFromSearchResults(linkId, lastResultMessage);
+                if (string.IsNullOrEmpty(url))
                 {
-                    // Extract URL from lastResultMessage search results
-                    url = ExtractUrlFromSearchResults(linkId, lastResultMessage);
-                    if (string.IsNullOrEmpty(url))
-                    {
-                        return $"Error: Could not resolve link ID {linkId}. No valid search results found in last message.";
-                    }
-                    _logger.LogDebug("Resolved link ID {LinkId} to URL from search results: {Url}", linkId, url);
+                    return $"Error: Could not resolve link ID {linkId}. No valid search results found in last message.";
                 }
-            }
-            else if (args.Cursor.HasValue && args.Cursor > 0 && _pages.ContainsKey(args.Cursor.Value) && args.Id == null)
-            {
-                // Scrolling on existing page - only when no ID is provided
-                var existingPage = _pages[args.Cursor.Value];
-                
-                _logger.LogDebug("Returning markdown scroll result for cursor: {Cursor}", args.Cursor.Value);
-                return FormatPageContent(existingPage, args.Loc ?? 1, args.NumLines ?? 20);
+                _logger.LogDebug("Resolved link ID {LinkId} to URL from search results: {Url}", linkId, url);
             }
             else if (string.IsNullOrEmpty(url))
             {
@@ -203,7 +198,7 @@ public class BrowserService
             response.EnsureSuccessStatusCode();
 
             string jsonContent;
-            
+
             // Check if the response is gzipped and decompress if needed
             if (response.Content.Headers.ContentEncoding.Contains("gzip"))
             {
@@ -216,7 +211,7 @@ public class BrowserService
             {
                 jsonContent = await response.Content.ReadAsStringAsync();
             }
-            
+
             _logger.LogDebug("Received Brave Search API response with length: {Length}", jsonContent.Length);
 
             var searchResponse = JsonSerializer.Deserialize<BraveSearchResponse>(jsonContent, new JsonSerializerOptions
@@ -261,18 +256,21 @@ public class BrowserService
         {
             // Try to parse the content as SearchResponse model
             var searchResponse = JsonSerializer.Deserialize<SearchResponse>(lastResultMessage.Content);
-            
+
+
+            linkId = Math.Min(Math.Max(linkId, 0), searchResponse?.TotalResults - 1 ?? 0);
+
             if (searchResponse?.Results != null)
             {
                 // Find the result with matching ID (1-based)
                 var targetResult = searchResponse.Results.FirstOrDefault(r => r.Id == linkId);
-                
+
                 if (targetResult != null)
                 {
                     return targetResult.Url;
                 }
             }
-            
+
             _logger.LogWarning("Could not find result with ID {LinkId} in search results", linkId);
             return null;
         }
@@ -303,7 +301,7 @@ public class BrowserService
         }
 
         var results = response.Web.Results.Take(requestedCount).ToList();
-        
+
         // Create search result items using the proper model
         var searchResultItems = results.Select((result, index) => new SearchResultItem
         {
@@ -321,7 +319,7 @@ public class BrowserService
         };
 
         // Store URL mapping for later use in open function - now handled via lastResultMessage
-        
+
         return JsonSerializer.Serialize(searchResponse, new JsonSerializerOptions { WriteIndented = true });
     }
 
@@ -445,7 +443,7 @@ public class BrowserService
         {
             var line = page.Lines[i];
             var matches = regex.Matches(line);
-            
+
             foreach (Match match in matches)
             {
                 results.Add(new BrowserFindResult

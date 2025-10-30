@@ -30,13 +30,13 @@ public class HarmonyFormatter : IDisposable
     /// <param name="tools">Optional list of tool definitions</param>
     /// <param name="responseFormat">Optional response format specification</param>
     /// <returns>Formatted prompt string</returns>
-    public string FormatPrompt(List<ChatMessage> messages, bool hasFunctions, ReasoningEffortLevel reasoningEffort, List<ToolDefinition>? tools = null, ResponseFormat? responseFormat = null)
+    public string FormatPrompt(List<ChatMessage> messages, ReasoningEffortLevel reasoningEffort, List<ToolDefinition>? tools = null, ResponseFormat? responseFormat = null)
     {
         _logger.LogDebug("Formatting prompt with {MessageCount} messages, functions: {HasFunctions}, reasoning: {ReasoningEffort}", 
-            messages.Count, hasFunctions, reasoningEffort);
+            messages.Count, tools?.Count ?? 0, reasoningEffort);
 
         // Convert to Harmony conversation format
-        var conversation = ConvertToHarmonyConversation(messages, hasFunctions, reasoningEffort, tools, responseFormat);
+        var conversation = ConvertToHarmonyConversation(messages, reasoningEffort, tools, responseFormat);
 
         // Format the conversation into Harmony format string
         var formattedPrompt = FormatHarmonyConversation(conversation);
@@ -47,7 +47,7 @@ public class HarmonyFormatter : IDisposable
     /// <summary>
     /// Formats a list of HarmonyMessage objects into the proper Harmony format string
     /// </summary>
-    private string FormatHarmonyConversation(List<HarmonyMessage> conversation)
+    public string FormatHarmonyConversation(List<HarmonyMessage> conversation)
     {
         var result = new StringBuilder();
         var config = new HarmonyMessageRenderConfig();
@@ -61,12 +61,12 @@ public class HarmonyFormatter : IDisposable
     /// <summary>
     /// Converts SharpAI messages to Harmony conversation format
     /// </summary>
-    private List<HarmonyMessage> ConvertToHarmonyConversation(List<ChatMessage> messages, bool hasFunctions, ReasoningEffortLevel reasoningEffort, List<ToolDefinition>? tools, ResponseFormat? responseFormat)
+    public List<HarmonyMessage> ConvertToHarmonyConversation(List<ChatMessage> messages, ReasoningEffortLevel reasoningEffort, List<ToolDefinition>? tools, ResponseFormat? responseFormat)
     {
         var harmonyMessages = new List<HarmonyMessage>();
 
         // Add system message with proper configuration
-        var systemContent = CreateSystemContent(reasoningEffort, hasFunctions, tools);
+        var systemContent = CreateSystemContent(reasoningEffort, tools);
 
         var systemMessage = new HarmonyMessage
         {
@@ -190,7 +190,7 @@ public class HarmonyFormatter : IDisposable
     /// <summary>
     /// Creates a system message with appropriate configuration for the Harmony library
     /// </summary>
-    private HarmonySystemContent CreateSystemContent(ReasoningEffortLevel reasoningEffort, bool hasFunctions, List<ToolDefinition>? tools)
+    private HarmonySystemContent CreateSystemContent(ReasoningEffortLevel reasoningEffort, List<ToolDefinition>? tools)
     {
         var systemContent = HarmonySystemContent.New()
             .WithConversationStartDate(DateTime.Now.ToString("yyyy-MM-dd"))
@@ -200,7 +200,7 @@ public class HarmonyFormatter : IDisposable
         systemContent = systemContent.WithBrowserTool();
 
         // Add function tools if provided
-        if (hasFunctions && tools?.Any() == true)
+        if (tools?.Any() == true)
         {
             var functionTools = tools.Select(tool => HarmonyToolDescription.New(
                 tool.Function.Name,

@@ -185,7 +185,6 @@ namespace SharpAI.Api.Chat
                                     Id = toolCall.CallId,
                                     Type = toolCall.Type.ToString().ToLower()
                                 };
-
                                 if (toolCall.Function != null)
                                 {
                                     toolCallDelta.Function = new FunctionCallDelta
@@ -210,7 +209,7 @@ namespace SharpAI.Api.Chat
                             var streamingResponse = new ChatCompletionStreamingResponse
                             {
                                 Id = streamId,
-                                Object = CompletionObjectType.ChatCompletionChunk,
+                                Object = chunk.Object,
                                 Created = chunk.Created,
                                 Model = chunk.Model,
                                 Choices = new List<ChatCompletionStreamingChoice>

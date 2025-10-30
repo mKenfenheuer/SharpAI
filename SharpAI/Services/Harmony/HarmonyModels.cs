@@ -1,4 +1,5 @@
 using System.Text;
+using System.Text.Json;
 using SharpAI.Models;
 
 namespace SharpAI.Services.Harmony;
@@ -161,6 +162,8 @@ public class HarmonyAssistantContent : HarmonyMessageContent
 
     internal override string? ChannelString => Channel.AsString();
 
+    internal override List<HarmonyToolDescription>? Tools => null;
+
     internal override void RenderInto(StringBuilder into, HarmonyMessageRenderConfig? options)
     {
         into.Append(HarmonyFormattingToken.Channel.AsString());
@@ -227,6 +230,7 @@ public class HarmonyToolCall
     public string ToolName { get; set; }
     public string Arguments { get; set; }
     public string? ConstraintType { get; set; }
+    public string Id { get; internal set; }
 }
 
 public class HarmonyResponse
@@ -402,6 +406,20 @@ public class HarmonyToolDescription
             Parameters = parameters
         };
     }
+
+
+
+    internal JsonSchemaFormat GetJsonSchema()
+    {
+        var format = new JsonSchemaFormat
+        {
+            Name = this.Name,
+            Description = this.Description,
+            Schema = JsonSerializer.Deserialize<dynamic>(JsonSerializer.Serialize(this.Parameters)),
+            Strict = true
+        };
+        return format;
+    }
 }
 
 /// <summary>
@@ -532,6 +550,7 @@ public abstract class HarmonyMessageContent
     internal abstract void RenderInto(StringBuilder into, HarmonyMessageRenderConfig? options);
     internal abstract string? StringContent { get; }
     internal abstract string? ChannelString { get; }
+    internal abstract List<HarmonyToolDescription>? Tools { get; }
 }
 
 /// <summary>
@@ -543,6 +562,8 @@ public class HarmonyTextContent : HarmonyMessageContent
     internal override string StringContent => Text;
 
     internal override string? ChannelString => null;
+
+    internal override List<HarmonyToolDescription>? Tools => null;
 
     public HarmonyTextContent() { }
     public HarmonyTextContent(string text) { Text = text; }
@@ -564,6 +585,8 @@ public class HarmonyToolResultContent : HarmonyMessageContent
     public string Content { get; set; } = string.Empty;
     internal override string? StringContent => Content;
     internal override string? ChannelString => null;
+
+    internal override List<HarmonyToolDescription>? Tools => null;
 
     public HarmonyToolResultContent(HarmonyToolCall toolCall, string content)
     {
@@ -597,7 +620,7 @@ public class HarmonySystemContent : HarmonyMessageContent
     public string? ConversationStartDate { get; set; }
     public string? KnowledgeCutoff { get; set; } = "2024-06";
     public HarmonyChannelConfig? ChannelConfig { get; set; }
-    public Dictionary<string, HarmonyToolNamespaceConfig>? Tools { get; set; }
+    public Dictionary<string, HarmonyToolNamespaceConfig>? DefinedTools { get; set; }
 
     internal override string? StringContent {
         get
@@ -609,6 +632,13 @@ public class HarmonySystemContent : HarmonyMessageContent
     }
 
     internal override string? ChannelString => null;
+
+    internal override List<HarmonyToolDescription>? Tools => DefinedTools?.SelectMany(kv => kv.Value.Tools.Select(t => new HarmonyToolDescription()
+    {
+        Name = $"{kv.Key}.{t.Name}",
+        Description = t.Description,
+        Parameters = t.Parameters
+    })).ToList();
 
     public HarmonySystemContent()
     {
@@ -656,8 +686,8 @@ public class HarmonySystemContent : HarmonyMessageContent
 
     public HarmonySystemContent WithTools(HarmonyToolNamespaceConfig nsConfig)
     {
-        Tools ??= new Dictionary<string, HarmonyToolNamespaceConfig>();
-        Tools[nsConfig.Name] = nsConfig;
+        DefinedTools ??= new Dictionary<string, HarmonyToolNamespaceConfig>();
+        DefinedTools[nsConfig.Name] = nsConfig;
         return this;
     }
 
@@ -706,9 +736,9 @@ public class HarmonySystemContent : HarmonyMessageContent
         }
 
         // Tools section
-        if (Tools?.Count > 0)
+        if (DefinedTools?.Count > 0)
         {
-            sections.Add(Tools.Render(options));
+            sections.Add(DefinedTools.Render(options));
         }
 
         // Channel configuration section
@@ -721,8 +751,8 @@ public class HarmonySystemContent : HarmonyMessageContent
             {
                 channelsHeader += " Channel must be included for every HarmonyMessage.";
             }
-            
-            if (Tools.Any())
+
+            if (DefinedTools.Any())
             {
                 channelsHeader += "\nCalls to these tools must go to the commentary channel: 'functions'.";
             }
@@ -740,10 +770,16 @@ public class HarmonySystemContent : HarmonyMessageContent
 public class HarmonyDeveloperContent : HarmonyMessageContent
 {
     public string? Instructions { get; set; }
-    public Dictionary<string, HarmonyToolNamespaceConfig>? Tools { get; set; }
+    public Dictionary<string, HarmonyToolNamespaceConfig>? DefinedTools { get; set; }
     public List<HarmonyResponseFormat> ResponseFormats { get; set; } = new List<HarmonyResponseFormat>();
     internal override string? StringContent => Instructions;
     internal override string? ChannelString => null;
+    internal override List<HarmonyToolDescription>? Tools => DefinedTools?.SelectMany(kv => kv.Value.Tools.Select(t => new HarmonyToolDescription()
+    {
+        Name = $"{kv.Key}.{t.Name}",
+        Description = t.Description,
+        Parameters = t.Parameters
+    })).ToList();
 
     public static HarmonyDeveloperContent New() => new();
 
@@ -755,8 +791,8 @@ public class HarmonyDeveloperContent : HarmonyMessageContent
 
     public HarmonyDeveloperContent WithTools(HarmonyToolNamespaceConfig nsConfig)
     {
-        Tools ??= new Dictionary<string, HarmonyToolNamespaceConfig>();
-        Tools[nsConfig.Name] = nsConfig;
+        DefinedTools ??= new Dictionary<string, HarmonyToolNamespaceConfig>();
+        DefinedTools[nsConfig.Name] = nsConfig;
         return this;
     }
 
@@ -781,9 +817,9 @@ public class HarmonyDeveloperContent : HarmonyMessageContent
             sections.Add(Instructions);
         }
 
-        if (Tools?.Count > 0)
+        if (DefinedTools?.Count > 0)
         {
-            sections.Add(Tools.Render(options));
+            sections.Add(DefinedTools.Render(options));
         }
 
         if (ResponseFormats.Count > 0)

@@ -26,6 +26,8 @@ public class HarmonyParser : IDisposable
     };
     
     public bool IsComplete { get; internal set; }
+    public bool IsFailed { get; private set; }
+
     public bool IsInFinalContent
     {
         get
@@ -36,8 +38,34 @@ public class HarmonyParser : IDisposable
                    _parserState.ParseState == HarmonyParseState.InMessageContent;
         }
     }
+    public string ToolCallRecipient
+    {
+        get
+        {
+            return IsInToolCallArguments ? _parserState.CurrentRecipient : null;
+        }
+    }
+    public bool IsInToolCallArguments
+    {
+        get
+        {
+            return _currentMessage != null &&
+                   _currentMessage.Role == HarmonyRole.Assistant &&
+                   !string.IsNullOrEmpty(_parserState.CurrentRecipient) &&
+                   _parserState.ParseState == HarmonyParseState.InMessageContent;
+        }
+    }
     public int ReasoningTokens { get; internal set; } = 0;
     public int CompletionTokens { get; internal set; } = 0;
+    public bool HasConstraint
+    {
+        get
+        {
+            return _parserState.ConstraintType != null || _parserState.ConstraintTypeText.Length > 0 || _parserState.ParseState == HarmonyParseState.InConstraint;
+        }
+    }
+
+    public string RawResponse => _rawContent.ToString();
 
     /// <summary>
     /// Initializes a new instance of the HarmonyParser.
@@ -61,6 +89,7 @@ public class HarmonyParser : IDisposable
         _rawContent.Clear();
         _messages.Clear();
         IsComplete = false;
+        IsFailed = false;
         
         // Reset content length tracking
         _previousContentLengths[HarmonyChannel.Final] = 0;
@@ -129,6 +158,14 @@ public class HarmonyParser : IDisposable
                 };
 
             case var t when t == HarmonyFormattingToken.Channel.AsString():
+                if(_parserState.ParseState == HarmonyParseState.WaitingForChannel)
+                {
+                    // We have already seen the channel token, this message is not a valid message. Fail with error.
+                    _logger.LogError("Received channel token while waiting for channel.");
+                    IsComplete = true;
+                    IsFailed = true;
+                    break;
+                }
                 // Transition to channel information in header
                 // Parse accumulated role header text before transitioning
                 if (_parserState.RoleHeaderText.Length > 0)
@@ -245,8 +282,10 @@ public class HarmonyParser : IDisposable
                         if (!_parserState.HasSentToolCallMetadata)
                         {
                             // First token for this tool call - include metadata
+                            _parserState.ToolCallId = Guid.NewGuid().ToString();
                             delta.ToolCall = new HarmonyToolCall
                             {
+                                Id = _parserState.ToolCallId,
                                 Recipient = _parserState.CurrentRecipient,
                                 ToolName = ExtractToolNameFromRecipient(_parserState.CurrentRecipient),
                                 Namespace = ExtractNamespaceFromRecipient(_parserState.CurrentRecipient),
@@ -392,6 +431,7 @@ public class HarmonyParser : IDisposable
         {
             var toolCall = new HarmonyToolCall
             {
+                Id = _parserState.ToolCallId,
                 Recipient = _parserState.CurrentRecipient,
                 ToolName = ExtractToolNameFromRecipient(_parserState.CurrentRecipient),
                 Namespace = ExtractNamespaceFromRecipient(_parserState.CurrentRecipient),
@@ -457,10 +497,15 @@ public class HarmonyParser : IDisposable
             {
                 ParseRole(_parserState.RoleHeaderText.ToString());
             }
-            
+
             if (_parserState.ChannelHeaderText.Length > 0 && _parserState.CurrentChannel == null)
             {
                 ParseChannelAndRecipient(_parserState.ChannelHeaderText.ToString());
+            }
+            
+            if(_parserState.CurrentChannel == null)
+            {
+                _logger.LogWarning("Finalizing message without a defined channel.");
             }
             
             FinalizeConstraintTypeIfPending();
@@ -509,6 +554,7 @@ public class HarmonyParser : IDisposable
         public StringBuilder RoleHeaderText { get; set; } = new StringBuilder();
         public StringBuilder ConstraintTypeText { get; set; } = new StringBuilder();
         public bool HasSentToolCallMetadata { get; set; } = false; // Track if we've sent initial tool call info
+        public string ToolCallId { get; set; } 
     }
 
     private enum HarmonyParseState
