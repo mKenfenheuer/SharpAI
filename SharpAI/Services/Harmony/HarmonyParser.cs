@@ -511,11 +511,6 @@ public class HarmonyParser : IDisposable
                 ParseChannelAndRecipient(_parserState.ChannelHeaderText.ToString());
             }
 
-            if (_parserState.CurrentChannel == null)
-            {
-                _logger.LogWarning("Finalizing message without a defined channel.");
-            }
-
             FinalizeConstraintTypeIfPending();
 
             _currentMessage.IsComplete = true;
@@ -525,6 +520,10 @@ public class HarmonyParser : IDisposable
             }
             if(_currentMessage.Content.Count > 0)
             {
+                if (_parserState.CurrentChannel == null)
+                {
+                    _logger.LogWarning("Finalizing message without a defined channel.");
+                }
                 _messages.Add(_currentMessage);
             }
             _currentMessage = null;

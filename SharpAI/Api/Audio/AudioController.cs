@@ -67,7 +67,7 @@ namespace SharpAI.Api.Audio
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Error processing audio transcription");
-                return StatusCode(500, new { error = new { message = "Internal server error", type = "internal_error" } });
+                return StatusCode(500, new { error = new { message = ex.Message, type = ex.GetType().Name } });
             }
         }
 
@@ -227,7 +227,7 @@ namespace SharpAI.Api.Audio
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Error processing audio translation");
-                return StatusCode(500, new { error = new { message = "Internal server error", type = "internal_error" } });
+                return StatusCode(500, new { error = new { message = ex.Message, type = ex.GetType().Name } });
             }
         }
 

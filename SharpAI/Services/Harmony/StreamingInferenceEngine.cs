@@ -73,9 +73,6 @@ public class StreamingInferenceEngine
         var continueWithFunctionGrammar = false;
 
         Grammar? grammar = null;
-        if (File.Exists("harmony.gbnf"))
-            grammar = new Grammar(File.ReadAllText("harmony.gbnf"), "harmony-root");
-
 
         startInference:
 
@@ -124,7 +121,7 @@ public class StreamingInferenceEngine
         }
 
 
-        if (continueWithGrammar && (grammar == null || grammar.Root == "harmony-root"))
+        if (continueWithGrammar && grammar == null)
         {
             _logger.LogInformation("Continuing inference with grammar-based response format validation");
 
@@ -135,7 +132,7 @@ public class StreamingInferenceEngine
             goto startInference;
         }
 
-        if (continueWithFunctionGrammar && (grammar == null || grammar.Root == "harmony-root"))
+        if (continueWithFunctionGrammar && grammar == null)
         {
             _logger.LogInformation("Continuing inference with grammar-based tool argument format validation");
             var tools = conversation.SelectMany(m => m.Content)
@@ -187,7 +184,7 @@ public class StreamingInferenceEngine
                 break;
             }
 
-            if (_parser.IsInToolCallArguments && grammar?.Root == "harmony-root")
+            if (_parser.IsInToolCallArguments && grammar == null)
             {
                 yield return new InferResponse<ChatCompletionResponse>()
                 {
@@ -196,7 +193,7 @@ public class StreamingInferenceEngine
                 break;
             }
 
-            if (_parser.HasConstraint && _parser.IsInFinalContent && grammar?.Root == "harmony-root" && request.ResponseFormat != null)
+            if (_parser.HasConstraint && _parser.IsInFinalContent && grammar == null && request.ResponseFormat != null)
             {
                 yield return new InferResponse<ChatCompletionResponse>()
                 {
@@ -282,45 +279,6 @@ public class StreamingInferenceEngine
         }
         return jsonGrammar;
     }
-
-    /// <summary>
-    /// Processes response format validation for JSON responses.
-    /// </summary>
-    private string ProcessResponseFormat(string content, ResponseFormat responseFormat)
-    {
-        if (responseFormat.Type == ResponseFormatType.JsonObject)
-        {
-            try
-            {
-                // Validate that the response is valid JSON
-                var jsonDoc = System.Text.Json.JsonDocument.Parse(content);
-                return content;
-            }
-            catch (System.Text.Json.JsonException ex)
-            {
-                _logger.LogWarning(ex, "Response format validation failed for JSON object");
-                // Return a valid JSON object with the content
-                return System.Text.Json.JsonSerializer.Serialize(new { content = content });
-            }
-        }
-        else if (responseFormat.Type == ResponseFormatType.JsonSchema && responseFormat.JsonSchema?.Schema != null)
-        {
-            // For JSON schema validation, we would need a JSON schema validator library
-            // For now, just validate it's valid JSON
-            try
-            {
-                var jsonDoc = System.Text.Json.JsonDocument.Parse(content);
-                return content;
-            }
-            catch (System.Text.Json.JsonException ex)
-            {
-                _logger.LogWarning(ex, "Response format validation failed for JSON schema");
-                return System.Text.Json.JsonSerializer.Serialize(new { content = content });
-            }
-        }
-
-        return content;
-    }
 }
 
 internal enum InferExitReason
@@ -335,16 +293,4 @@ internal class InferResponse<T>
 {
     public InferExitReason ExitReason { get; internal set; } = InferExitReason.None;
     public ChatCompletionResponse Chunk { get; internal set; }
-}
-
-/// <summary>
-/// Represents a single result from the streaming inference process.
-/// Contains either incremental delta updates or the final parsed response.
-/// </summary>
-public class StreamingInferenceResult
-{
-    public ChatCompletionResponse Response { get; set; }
-    public bool IsComplete { get; set; }
-    public string RawResponse { get; set; } = string.Empty;
-    public int TokenCount { get; set; }
 }

@@ -91,7 +91,7 @@ namespace SharpAI.Api.Chat
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Error processing chat completion request");
-                return StatusCode(500, new { error = new { message = "Internal server error", type = "internal_error" } });
+                return StatusCode(500, new { error = new { message = ex.Message, type = ex.GetType().Name } });
             }
         }
 
