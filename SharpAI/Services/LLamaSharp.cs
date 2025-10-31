@@ -70,9 +70,6 @@ public class LLamaSharpService : IDisposable
             _logger.LogError(ex, "Invalid model requested: {ModelName}", requestedModel);
             throw new ArgumentException($"Model '{requestedModel}' is not available. Use /v1/models to see available models.", ex);
         }
-
-        var inferenceParams = LLamaUtilities.CreateInferenceParams(request, modelInstance);
-        
         // Prepare messages with default system prompt if needed
         var allMessages = PrepareMessages(request.Messages);
 
@@ -80,7 +77,7 @@ public class LLamaSharpService : IDisposable
         ChatCompletionResponse? finalResponse = null;
         var reasoningTokens = 0;
 
-        await foreach (var result in streamingEngine.GenerateStreamAsync(allMessages, request, modelInstance, inferenceParams, cancellationToken: token))
+        await foreach (var result in streamingEngine.GenerateStreamAsync(allMessages, request, modelInstance, cancellationToken: token))
         {
             yield return result;
         }

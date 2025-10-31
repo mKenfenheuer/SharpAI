@@ -387,6 +387,11 @@ root ::= .*
         /// </summary>
         private string AddRule(string name, string rule)
         {
+            if(name == "root")
+            {
+                rule += " \"<|end|>\"";
+            }
+
             var escapedName = INVALID_RULE_CHARS_RE.Replace(name, "-");
             if (!_rules.ContainsKey(escapedName) || _rules[escapedName] == rule)
             {

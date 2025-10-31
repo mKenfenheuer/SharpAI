@@ -1,7 +1,9 @@
 using LLama;
 using LLama.Common;
 using LLama.Native;
+using LLama.Sampling;
 using SharpAI.Models;
+using SharpAI.Services.Harmony;
 using System.Collections.Concurrent;
 using System.Text.Json;
 
@@ -205,15 +207,12 @@ namespace SharpAI.Services
 
                 var weights = LLamaWeights.LoadFromFile(parameters);
                 var context = weights.CreateContext(parameters);
-                var executor = new InteractiveExecutor(context);
 
                 var modelInstance = new ModelInstance
                 {
                     Name = config.Name,
                     Weights = weights,
-                    Context = context,
-                    Executor = executor,
-                    Configuration = config
+                    Context = context
                 };
 
                 _logger.LogInformation("Successfully loaded model {ModelName}", config.Name);
@@ -365,20 +364,29 @@ namespace SharpAI.Services
     }
 
     /// <summary>
-    /// Represents a loaded model instance with weights, context, and executor.
+    /// Represents a loaded model instance with weights, context, and provides executor.
     /// </summary>
     public class ModelInstance : IDisposable
     {
         public string Name { get; set; } = string.Empty;
         public LLamaWeights? Weights { get; set; }
         public LLamaContext? Context { get; set; }
-        public InteractiveExecutor? Executor { get; set; }
-        public ModelConfiguration? Configuration { get; set; }
 
         public void Dispose()
         {
-            Context?.Dispose();
             Weights?.Dispose();
+            Context?.Dispose();
+        }
+
+        public async IAsyncEnumerable<string> InferAsync(ChatCompletionRequest request, string formattedPrompt, Grammar? grammar)
+        {
+            var inferenceParams = LLamaUtilities.CreateInferenceParams(request, this, grammar);
+            var executor = new StatelessExecutor(Weights!, Context!.Params);
+
+            await foreach (var token in executor.InferAsync(formattedPrompt, inferenceParams))
+            {
+                yield return token;
+            }
         }
     }
 }

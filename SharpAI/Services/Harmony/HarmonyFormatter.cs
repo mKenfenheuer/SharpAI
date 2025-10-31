@@ -194,23 +194,8 @@ public class HarmonyFormatter : IDisposable
     {
         var systemContent = HarmonySystemContent.New()
             .WithConversationStartDate(DateTime.Now.ToString("yyyy-MM-dd"))
-            .WithReasoningEffort(ConvertReasoningEffort(reasoningEffort));
-
-        // Add browser tools by default
-        systemContent = systemContent.WithBrowserTool();
-
-        // Add function tools if provided
-        if (tools?.Any() == true)
-        {
-            var functionTools = tools.Select(tool => HarmonyToolDescription.New(
-                tool.Function.Name,
-                tool.Function.Description ?? "",
-                ConvertParametersToDict(tool.Function.Parameters)
-            )).ToArray();
-
-            var functionNamespace = new HarmonyToolNamespaceConfig("functions", "Function calling tools", functionTools);
-            systemContent = systemContent.WithTools(functionNamespace);
-        }
+            .WithReasoningEffort(ConvertReasoningEffort(reasoningEffort))
+            .WithRequiredChannels(new[] { HarmonyChannel.Analysis, HarmonyChannel.Commentary, HarmonyChannel.Final });
 
         return systemContent;
     }

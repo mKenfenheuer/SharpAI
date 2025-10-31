@@ -86,10 +86,11 @@ public static class LLamaUtilities
     /// <param name="request">Chat completion request containing generation parameters</param>
     /// <param name="modelInstance">Model instance for context</param>
     /// <returns>Configured inference parameters for LLamaSharp</returns>
-    public static InferenceParams CreateInferenceParams(ChatCompletionRequest request, ModelInstance modelInstance)
+    public static InferenceParams CreateInferenceParams(ChatCompletionRequest request, ModelInstance modelInstance, Grammar? grammar = null)
     {
         // Build stop sequences list
         var antiPrompts = new List<string> { "<|return|>", "<|call|>" };
+        //var antiPrompts = new List<string> { };
 
         // Handle custom stop sequences
         if (request.Stop != null)
@@ -118,19 +119,11 @@ public static class LLamaUtilities
             }
         }
 
-        // Load default Harmony grammar from "harmony.gbnf" if available
-        Grammar? harmonyGrammar = null;
-        var grammarPath = System.IO.Path.Combine(Environment.CurrentDirectory, "harmony.gbnf");
-        if (System.IO.File.Exists(grammarPath))
-        {
-            harmonyGrammar = new Grammar(File.ReadAllText(grammarPath), "root");
-        }
-
         var inferenceParams = new InferenceParams
         {
             MaxTokens = request.MaxTokens ?? int.MaxValue,
             AntiPrompts = new List<string>(antiPrompts),
-            SamplingPipeline = BuildSamplingPipeline(request, harmonyGrammar),
+            SamplingPipeline = BuildSamplingPipeline(request, grammar),
             DecodeSpecialTokens = true
         };
 
@@ -149,14 +142,29 @@ public static class LLamaUtilities
             repeatPenalty = (float)(1.0 + Math.Abs(request.PresencePenalty.Value));
         }
 
-        var samplingPipeline = new DefaultSamplingPipeline()
+        DefaultSamplingPipeline samplingPipeline;
+
+        if (grammar != null)
         {
-            Temperature = (float)(request.Temperature ?? 0.7),
-            TopP = (float)(request.TopP ?? 1.0),
-            RepeatPenalty = repeatPenalty,
-            PreventEOS = false,
-            Grammar = grammar,
-        };
+            samplingPipeline = new DefaultSamplingPipeline()
+            {
+                Temperature = (float)(request.Temperature ?? 0.7),
+                TopP = (float)(request.TopP ?? 1.0),
+                RepeatPenalty = repeatPenalty,
+                PreventEOS = false,
+                Grammar = grammar
+            };
+        }
+        else
+        {
+            samplingPipeline = new DefaultSamplingPipeline()
+            {
+                Temperature = (float)(request.Temperature ?? 0.7),
+                TopP = (float)(request.TopP ?? 1.0),
+                RepeatPenalty = repeatPenalty,
+                PreventEOS = false
+            };
+        }   
         return samplingPipeline;
     }
 

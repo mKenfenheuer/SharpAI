@@ -378,11 +378,11 @@ public class HarmonyChannelConfig
     public List<string> ValidChannels { get; set; } = new();
     public bool ChannelRequired { get; set; }
 
-    public static HarmonyChannelConfig RequireChannels(IEnumerable<string> channels)
+    public static HarmonyChannelConfig RequireChannels(IEnumerable<HarmonyChannel> channels)
     {
         return new HarmonyChannelConfig
         {
-            ValidChannels = channels.ToList(),
+            ValidChannels = channels.Select(c => c.ToString()).ToList(),
             ChannelRequired = true
         };
     }
@@ -437,108 +437,6 @@ public class HarmonyToolNamespaceConfig
         Name = name;
         Description = description;
         Tools = tools.ToList();
-    }
-
-    public static HarmonyToolNamespaceConfig Browser()
-    {
-        // Browser tool configuration matching the detailed specification
-        return new HarmonyToolNamespaceConfig("browser", @"Tool for browsing.
-Do not quote more than 10 words directly from the tool output.
-sources=web (default: web)
-Search results are returned in JSON format with the following structure:
-- message: Summary of results found
-- total_results: Number of results returned  
-- results: Array of search results, each containing:
-  - id: Unique identifier for opening the page (use this with the open function)
-  - title: Page title
-  - description: Page description
-  - url: Full URL of the page
-Cite information from the tool using the following format:
-`【{cursor}†L{line_start}(-L{line_end})?】`, for example: `【6†L9-L11】` or `【8†L3】`.
-Use the `url` property from search results with the `open` function to navigate to specific pages.", new[]
-        {
-            HarmonyToolDescription.New("search", "Searches for information related to `query` and displays `topn` results.", new Dictionary<string, object>
-            {
-                ["type"] = "object",
-                ["properties"] = new Dictionary<string, object>
-                {
-                    ["query"] = new Dictionary<string, object>
-                    {
-                        ["type"] = "string",
-                        ["description"] = "Search query string"
-                    },
-                    ["topn"] = new Dictionary<string, object>
-                    {
-                        ["type"] = "number",
-                        ["description"] = "Number of results to display",
-                        ["default"] = 10
-                    },
-                    ["source"] = new Dictionary<string, object>
-                    {
-                        ["type"] = "string",
-                        ["description"] = "Source to search",
-                        ["default"] = "web"
-                    }
-                },
-                ["required"] = new[] { "query" }
-            }),
-            HarmonyToolDescription.New("open", @"Opens the `id` from the page starting at line number `loc`, showing `num_lines` lines.
-Use the `id` from search results JSON (e.g., 1, 2, 3) to open specific pages from search results.
-If `loc` is not provided, the viewport will be positioned at the beginning of the document or centered on the most relevant passage, if available.", new Dictionary<string, object>
-            {
-                ["type"] = "object",
-                ["properties"] = new Dictionary<string, object>
-                {
-                    ["url"] = new Dictionary<string, object>
-                    {
-                        ["type"] = "string",
-                        ["description"] = "The url to open from the search results JSON",
-                        ["default"] = -1
-                    },
-                    ["loc"] = new Dictionary<string, object>
-                    {
-                        ["type"] = "number",
-                        ["description"] = "Line number to start viewing from",
-                        ["default"] = -1
-                    },
-                    ["num_lines"] = new Dictionary<string, object>
-                    {
-                        ["type"] = "number",
-                        ["description"] = "Number of lines to display",
-                        ["default"] = -1
-                    }
-                },
-                ["required"] = new string[] { }
-            }),
-            HarmonyToolDescription.New("find", "Finds exact matches of `pattern` in the current page, or the page given by `cursor`.", new Dictionary<string, object>
-            {
-                ["type"] = "object",
-                ["properties"] = new Dictionary<string, object>
-                {
-                    ["pattern"] = new Dictionary<string, object>
-                    {
-                        ["type"] = "string",
-                        ["description"] = "Pattern to search for"
-                    },
-                    ["cursor"] = new Dictionary<string, object>
-                    {
-                        ["type"] = "number",
-                        ["description"] = "Page cursor identifier",
-                        ["default"] = -1
-                    }
-                },
-                ["required"] = new[] { "pattern" }
-            })
-        });
-    }
-
-    public static HarmonyToolNamespaceConfig Python()
-    {
-        // Simplified Python tool config
-        return new HarmonyToolNamespaceConfig("python", "Python code execution", new[]
-        {
-            HarmonyToolDescription.New("execute", "Execute Python code", null)
-        });
     }
 }
 
@@ -611,7 +509,7 @@ public class HarmonyToolResultContent : HarmonyMessageContent
 
 
 /// <summary>
-/// System-specific content with model configuration.
+/// System-specific content with Harmony-compatible model configuration.
 /// </summary>
 public class HarmonySystemContent : HarmonyMessageContent
 {
@@ -620,7 +518,6 @@ public class HarmonySystemContent : HarmonyMessageContent
     public string? ConversationStartDate { get; set; }
     public string? KnowledgeCutoff { get; set; } = "2024-06";
     public HarmonyChannelConfig? ChannelConfig { get; set; }
-    public Dictionary<string, HarmonyToolNamespaceConfig>? DefinedTools { get; set; }
 
     internal override string? StringContent {
         get
@@ -633,16 +530,11 @@ public class HarmonySystemContent : HarmonyMessageContent
 
     internal override string? ChannelString => null;
 
-    internal override List<HarmonyToolDescription>? Tools => DefinedTools?.SelectMany(kv => kv.Value.Tools.Select(t => new HarmonyToolDescription()
-    {
-        Name = $"{kv.Key}.{t.Name}",
-        Description = t.Description,
-        Parameters = t.Parameters
-    })).ToList();
+    internal override List<HarmonyToolDescription>? Tools => null;
 
     public HarmonySystemContent()
     {
-        ChannelConfig = HarmonyChannelConfig.RequireChannels(new[] { "analysis", "commentary", "final" });
+        ChannelConfig = HarmonyChannelConfig.RequireChannels(new[] { HarmonyChannel.Analysis, HarmonyChannel.Commentary, HarmonyChannel.Final });
     }
 
     public static HarmonySystemContent New() => new();
@@ -678,21 +570,11 @@ public class HarmonySystemContent : HarmonyMessageContent
         return this;
     }
 
-    public HarmonySystemContent WithRequiredChannels(IEnumerable<string> channels)
+    public HarmonySystemContent WithRequiredChannels(IEnumerable<HarmonyChannel> channels)
     {
         ChannelConfig = HarmonyChannelConfig.RequireChannels(channels);
         return this;
     }
-
-    public HarmonySystemContent WithTools(HarmonyToolNamespaceConfig nsConfig)
-    {
-        DefinedTools ??= new Dictionary<string, HarmonyToolNamespaceConfig>();
-        DefinedTools[nsConfig.Name] = nsConfig;
-        return this;
-    }
-
-    public HarmonySystemContent WithBrowserTool() => WithTools(HarmonyToolNamespaceConfig.Browser());
-    public HarmonySystemContent WithPythonTool() => WithTools(HarmonyToolNamespaceConfig.Python());
 
     internal override void RenderInto(StringBuilder into, HarmonyMessageRenderConfig? options)
     {
@@ -701,24 +583,15 @@ public class HarmonySystemContent : HarmonyMessageContent
         // Top section: model identity, knowledge cutoff, current date
         var topSection = new List<string>();
         if (!string.IsNullOrEmpty(ModelIdentity))
-        {
             topSection.Add(ModelIdentity);
-        }
         if (!string.IsNullOrEmpty(KnowledgeCutoff))
-        {
             topSection.Add($"Knowledge cutoff: {KnowledgeCutoff}");
-        }
         if (!string.IsNullOrEmpty(ConversationStartDate))
-        {
             topSection.Add($"Current date: {ConversationStartDate}");
-        }
         if (topSection.Count > 0)
-        {
             sections.Add(string.Join("\n", topSection));
-        }
 
-        // Instructions and reasoning section
-        var instructionsAndReasoning = new List<string>();
+        // Reasoning
         if (ReasoningEffort.HasValue)
         {
             var effortStr = ReasoningEffort.Value switch
@@ -728,35 +601,16 @@ public class HarmonySystemContent : HarmonyMessageContent
                 HarmonyReasoningEffort.High => "high",
                 _ => throw new ArgumentOutOfRangeException()
             };
-            instructionsAndReasoning.Add($"Reasoning: {effortStr}");
-        }
-        if (instructionsAndReasoning.Count > 0)
-        {
-            sections.Add(string.Join("\n", instructionsAndReasoning));
+            sections.Add($"Reasoning: {effortStr}");
         }
 
-        // Tools section
-        if (DefinedTools?.Count > 0)
-        {
-            sections.Add(DefinedTools.Render(options));
-        }
-
-        // Channel configuration section
+        // Channels
         if (ChannelConfig?.ValidChannels?.Count > 0)
         {
             var channels = string.Join(", ", ChannelConfig.ValidChannels);
             var channelsHeader = $"# Valid channels: {channels}.";
-            
             if (ChannelConfig.ChannelRequired)
-            {
-                channelsHeader += " Channel must be included for every HarmonyMessage.";
-            }
-
-            if (DefinedTools.Any())
-            {
-                channelsHeader += "\nCalls to these tools must go to the commentary channel: 'functions'.";
-            }
-            
+                channelsHeader += " Channel must be included for every message.";
             sections.Add(channelsHeader);
         }
 
@@ -765,15 +619,17 @@ public class HarmonySystemContent : HarmonyMessageContent
 }
 
 /// <summary>
-/// Developer-specific content with instructions and tools.
+/// Developer-specific content with Harmony-compatible instructions and tools.
 /// </summary>
 public class HarmonyDeveloperContent : HarmonyMessageContent
 {
     public string? Instructions { get; set; }
     public Dictionary<string, HarmonyToolNamespaceConfig>? DefinedTools { get; set; }
     public List<HarmonyResponseFormat> ResponseFormats { get; set; } = new List<HarmonyResponseFormat>();
+
     internal override string? StringContent => Instructions;
     internal override string? ChannelString => null;
+
     internal override List<HarmonyToolDescription>? Tools => DefinedTools?.SelectMany(kv => kv.Value.Tools.Select(t => new HarmonyToolDescription()
     {
         Name = $"{kv.Key}.{t.Name}",
@@ -818,9 +674,7 @@ public class HarmonyDeveloperContent : HarmonyMessageContent
         }
 
         if (DefinedTools?.Count > 0)
-        {
             sections.Add(DefinedTools.Render(options));
-        }
 
         if (ResponseFormats.Count > 0)
         {
@@ -829,9 +683,7 @@ public class HarmonyDeveloperContent : HarmonyMessageContent
             {
                 sections.Add($"## {responseFormat.Name}");
                 if (!string.IsNullOrEmpty(responseFormat.Description))
-                {
                     sections.Add($"// {responseFormat.Description}");
-                }
                 sections.Add($"{responseFormat.Schema}");
             }
         }
@@ -839,6 +691,7 @@ public class HarmonyDeveloperContent : HarmonyMessageContent
         into.Append(string.Join("\n\n", sections));
     }
 }
+
 
 public class HarmonyResponseFormat
 {
