@@ -804,6 +804,19 @@ root ::= .*
             throw new InvalidOperationException("At least one of minValue or maxValue must be set");
         }
 
+        private List<List<string>> GetAllSubsets(List<string> list)
+        {
+            var result = new List<List<string>> { new List<string>() };
+
+            foreach (var item in list)
+            {
+                var newSubsets = result.Select(subset => new List<string>(subset) { item }).ToList();
+                result.AddRange(newSubsets);
+            }
+
+            return result;
+        }
+
         /// <summary>
         /// Builds object rule with properties and constraints.
         /// </summary>
@@ -817,17 +830,20 @@ root ::= .*
                 .ThenBy(p => properties.FindIndex(x => x.Item1 == p.Item1))
                 .ToList();
 
+            // Build rules for each property
             foreach (var (propName, propSchema) in sortedProps)
             {
                 var propRuleName = Visit(propSchema, string.IsNullOrEmpty(name) ? propName : $"{name}-{propName}");
                 propKvRuleNames[propName] = AddRule(
                     string.IsNullOrEmpty(name) ? $"{propName}-kv" : $"{name}-{propName}-kv",
-                    $"{FormatLiteral(propName)} space \":\" space {propRuleName}");
+                    $"{FormatLiteral(propName)} \" : \" {propRuleName}");
             }
 
+            // Split required vs optional
             var requiredProps = sortedProps.Where(p => required.Contains(p.Item1)).Select(p => p.Item1).ToList();
             var optionalProps = sortedProps.Where(p => !required.Contains(p.Item1)).Select(p => p.Item1).ToList();
 
+            // Handle additionalProperties
             if (additionalProperties != null && !additionalProperties.Equals(false))
             {
                 var subName = string.IsNullOrEmpty(name) ? "additional" : $"{name}-additional";
@@ -839,36 +855,32 @@ root ::= .*
                     AddPrimitive("string", GrammarRules.PRIMITIVE_RULES["string"]) :
                     AddRule($"{subName}-k", NotStrings(sortedProps.Select(p => p.Item1).ToList()));
 
-                propKvRuleNames["*"] = AddRule($"{subName}-kv", $"{keyRule} \":\" space {valueRule}");
+                propKvRuleNames["*"] = AddRule($"{subName}-kv", $"{keyRule} \" : \" {valueRule}");
                 optionalProps.Add("*");
             }
 
-            var rule = "\"{\" space";
+            // Build object rule
+            var ruleBuilder = new StringBuilder();
+            ruleBuilder.Append("\"{\" ");
+
             if (requiredProps.Any())
             {
-                rule += " " + string.Join(" \",\" space ", requiredProps.Select(k => propKvRuleNames[k]));
+                ruleBuilder.Append(string.Join(" \",\" ", requiredProps.Select(k => propKvRuleNames[k])));
             }
 
             if (optionalProps.Any())
             {
-                rule += " (";
+                var optionalRule = string.Join(" | ", optionalProps.Select(k => propKvRuleNames[k]));
                 if (requiredProps.Any())
-                    rule += " \",\" space ( ";
-
-                var optionalRules = new List<string>();
-                for (int i = 0; i < optionalProps.Count; i++)
                 {
-                    optionalRules.Add(GetRecursiveRefs(optionalProps.Skip(i).ToList(), propKvRuleNames, name, i == 0 && !requiredProps.Any()));
+                    ruleBuilder.Append(" \",\" ");
                 }
-                rule += " " + string.Join(" | ", optionalRules);
-
-                if (requiredProps.Any())
-                    rule += " )";
-                rule += " )?";
+                // Zero or more optional props, comma-separated
+                ruleBuilder.Append($"( {optionalRule} ( \",\" {optionalRule} )* )?");
             }
 
-            rule += " \"}\" space";
-            return rule;
+            ruleBuilder.Append(" \"}\" ");
+            return ruleBuilder.ToString();
         }
 
         /// <summary>

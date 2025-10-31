@@ -238,7 +238,7 @@ public class StreamingInferenceEngine
                                     Type = Enum.TryParse<ToolType>(tc.Type, true, out var type) ? type : ToolType.Function,
                                     Function = tc.Function != null ? new FunctionCall
                                     {
-                                        Name = tc.Function.Name.StartsWith("functions.") ? tc.Function.Name.Substring("functions.".Length) : tc.Function.Name,
+                                        Name = tc.Function.Name?.StartsWith("functions.") == true ? tc.Function.Name.Substring("functions.".Length) : tc.Function.Name,
                                         Namespace = "functions",
                                         Arguments = tc.Function.Arguments ?? ""
                                     } : null
