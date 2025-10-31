@@ -392,6 +392,7 @@ public static class LLamaUtilities
                         chatMessage.ToolCalls ??= new List<ToolCall>();
                         chatMessage.ToolCalls.Add(new ToolCall
                         {
+                            CallId = toolCall.Id,
                             Type = ToolType.Function,
                             Function = new FunctionCall
                             {

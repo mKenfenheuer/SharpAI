@@ -158,7 +158,7 @@ public class StreamingInferenceEngine
                         messages,
                         request,
                         CompletionObjectType.ChatCompletion,
-                        "stop",
+                        completeMessages.ToolCall != null ? "tool_calls" : "stop",
                         _parser.ReasoningTokens,
                         LLamaUtilities.EstimateTokens(formattedPrompt),
                         _parser.CompletionTokens);
