@@ -71,7 +71,7 @@ namespace SharpAI.Api.Chat
             try
             {
                 _logger.LogInformation("Received chat completion request for model: {Model}, Stream: {Stream}", request.Model, request.Stream);
-
+                _logger.LogDebug("Request details: {@Request}", JsonSerializer.Serialize(request));
                 // Validate request
                 if (request.Messages == null || !request.Messages.Any())
                 {
