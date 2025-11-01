@@ -36,6 +36,7 @@ public class Program
         builder.Services.AddSingleton<SharpAI.Services.LLamaModelManager>();
         builder.Services.AddSingleton<SharpAI.Services.LLamaNativeLogging>();
         builder.Services.AddSingleton<SharpAI.Services.WhisperModelManager>();
+        builder.Services.AddSingleton<SharpAI.Services.RequestLogger>();
         
         // Register harmony services
         builder.Services.AddScoped<SharpAI.Services.Harmony.HarmonyFormatter>();

@@ -30,16 +30,19 @@ namespace SharpAI.Api.Chat
     {
         private readonly LLamaSharpService _llamaService;
         private readonly ILogger<ChatController> _logger;
+        private readonly RequestLogger _requestLogger;
 
         /// <summary>
         /// Initializes a new instance of the ChatController.
         /// </summary>
         /// <param name="llamaService">LLamaSharp service for chat completions</param>
         /// <param name="logger">Logger for controller operations</param>
-        public ChatController(LLamaSharpService llamaService, ILogger<ChatController> logger)
+        /// <param name="requestLogger">Request logger for JSONL logging</param>
+        public ChatController(LLamaSharpService llamaService, ILogger<ChatController> logger, RequestLogger requestLogger)
         {
             _llamaService = llamaService;
             _logger = logger;
+            _requestLogger = requestLogger;
         }
 
         /// <summary>
@@ -68,29 +71,40 @@ namespace SharpAI.Api.Chat
         [HttpPost("completions")]
         public async Task<IActionResult> CreateChatCompletion([FromBody] ChatCompletionRequest request)
         {
+            var requestId = Guid.NewGuid().ToString("N");
+            
             try
             {
-                _logger.LogInformation("Received chat completion request for model: {Model}, Stream: {Stream}", request.Model, request.Stream);
-                _logger.LogDebug("Request details: {@Request}", JsonSerializer.Serialize(request));
+                _logger.LogInformation("[{RequestId}] Received chat completion request for model: {Model}, Stream: {Stream}", 
+                    requestId, request.Model, request.Stream);
+                _logger.LogDebug("[{RequestId}] Request details: {Request}", 
+                    requestId, JsonSerializer.Serialize(request));
+                
+                // Log request to JSONL file
+                await _requestLogger.LogRequestAsync(requestId, request);
+                
                 // Validate request
                 if (request.Messages == null || !request.Messages.Any())
                 {
-                    return BadRequest(new { error = new { message = "Messages cannot be empty", type = "invalid_request_error" } });
+                    var error = new { error = new { message = "Messages cannot be empty", type = "invalid_request_error" } };
+                    await _requestLogger.LogErrorAsync(requestId, "Messages cannot be empty");
+                    return BadRequest(error);
                 }
 
                 // Check if streaming is requested
                 if (request.Stream == true)
                 {
-                    return await HandleStreamingResponse(request);
+                    return await HandleStreamingResponse(request, requestId);
                 }
                 else
                 {
-                    return await HandleNonStreamingResponse(request);
+                    return await HandleNonStreamingResponse(request, requestId);
                 }
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Error processing chat completion request");
+                _logger.LogError(ex, "[{RequestId}] Error processing chat completion request", requestId);
+                await _requestLogger.LogErrorAsync(requestId, ex.Message, ex.StackTrace);
                 return StatusCode(500, new { error = new { message = ex.Message, type = ex.GetType().Name } });
             }
         }
@@ -99,19 +113,27 @@ namespace SharpAI.Api.Chat
         /// Handles non-streaming chat completion requests.
         /// </summary>
         /// <param name="request">The chat completion request</param>
+        /// <param name="requestId">Unique identifier for this request</param>
         /// <returns>A complete chat completion response</returns>
-        private async Task<IActionResult> HandleNonStreamingResponse(ChatCompletionRequest request)
+        private async Task<IActionResult> HandleNonStreamingResponse(ChatCompletionRequest request, string requestId)
         {
+            _logger.LogInformation("[{RequestId}] Processing non-streaming request", requestId);
+            
             CancellationTokenSource cts = new CancellationTokenSource();
             Request.HttpContext.RequestAborted.Register(() => cts.Cancel());
                 
             ChatCompletionResponse? response = null;
 
-            await foreach (var result in _llamaService.GenerateChatCompletionAsync(request, cts.Token))
+            await foreach (var result in _llamaService.GenerateChatCompletionAsync(request, requestId, cts.Token))
             {
                 response = result;
             }
 
+            // Log final response
+            _logger.LogInformation("[{RequestId}] Completed non-streaming request", requestId);
+            _logger.LogDebug("[{RequestId}] Final response: {Response}", requestId, JsonSerializer.Serialize(response));
+            await _requestLogger.LogFinalResponseAsync(requestId, response);
+            
             // For non-streaming responses, the channel handling is already done in ToChatMessages
             // The final response will have content in the appropriate fields (Content vs Reasoning)
             return Ok(response);
@@ -121,9 +143,12 @@ namespace SharpAI.Api.Chat
         /// Handles streaming chat completion requests using Server-Sent Events.
         /// </summary>
         /// <param name="request">The chat completion request</param>
+        /// <param name="requestId">Unique identifier for this request</param>
         /// <returns>A streaming response</returns>
-        private async Task<IActionResult> HandleStreamingResponse(ChatCompletionRequest request)
+        private async Task<IActionResult> HandleStreamingResponse(ChatCompletionRequest request, string requestId)
         {
+            _logger.LogInformation("[{RequestId}] Processing streaming request", requestId);
+            
             Response.ContentType = "text/event-stream";
             Response.Headers.Add("Cache-Control", "no-cache");
             Response.Headers.Add("Connection", "keep-alive");
@@ -135,8 +160,9 @@ namespace SharpAI.Api.Chat
             {
                 bool isFirstChunk = true;
                 string? streamId = null;
+                var completeResponse = new System.Text.StringBuilder();
 
-                await foreach (var chunk in _llamaService.GenerateChatCompletionAsync(request, cts.Token))
+                await foreach (var chunk in _llamaService.GenerateChatCompletionAsync(request, requestId, cts.Token))
                 {
                     // Use the same ID for all chunks in this stream
                     streamId ??= chunk.Id;
@@ -159,6 +185,7 @@ namespace SharpAI.Api.Chat
                         if (!string.IsNullOrEmpty(assistantChoice.Message.Content))
                         {
                             delta.Content = assistantChoice.Message.Content;
+                            completeResponse.Append(assistantChoice.Message.Content);
                         }
                         
                         if (!string.IsNullOrEmpty(assistantChoice.Message.Reasoning))
@@ -234,10 +261,20 @@ namespace SharpAI.Api.Chat
                 // Send the final [DONE] message to indicate the stream has ended
                 await Response.WriteAsync("data: [DONE]\n\n");
                 await Response.Body.FlushAsync();
+                
+                // Log final response
+                _logger.LogInformation("[{RequestId}] Completed streaming request", requestId);
+                _logger.LogDebug("[{RequestId}] Complete streamed response: {Response}", requestId, completeResponse.ToString());
+                await _requestLogger.LogFinalResponseAsync(requestId, new { 
+                    StreamId = streamId, 
+                    CompleteResponse = completeResponse.ToString() 
+                });
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Error during streaming chat completion");
+                _logger.LogError(ex, "[{RequestId}] Error during streaming chat completion", requestId);
+                await _requestLogger.LogErrorAsync(requestId, ex.Message, ex.StackTrace);
+                
                 var errorResponse = new { error = new { message = "Stream error", type = "internal_error" } };
                 var errorJson = JsonSerializer.Serialize(errorResponse);
                 cts.Cancel();

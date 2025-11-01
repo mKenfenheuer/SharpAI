@@ -16,6 +16,7 @@ public class LLamaSharpService : IDisposable
     private readonly LLamaModelManager _modelManager;
     private readonly ILogger<LLamaSharpService> _logger;
     private readonly IServiceProvider _serviceProvider;
+    private readonly RequestLogger _requestLogger;
 
     /// <summary>
     /// Initializes a new instance of the LLamaSharpService.
@@ -23,29 +24,34 @@ public class LLamaSharpService : IDisposable
     /// <param name="modelManager">Model manager for loading and managing models</param>
     /// <param name="logger">Logger for service operations</param>
     /// <param name="serviceProvider">Service provider for retrieving scoped services</param>
+    /// <param name="requestLogger">Request logger for JSONL logging</param>
     public LLamaSharpService(
         LLamaModelManager modelManager, 
         ILogger<LLamaSharpService> logger,
-        IServiceProvider serviceProvider)
+        IServiceProvider serviceProvider,
+        RequestLogger requestLogger)
     {
         _modelManager = modelManager;
         _logger = logger;
         _serviceProvider = serviceProvider;
+        _requestLogger = requestLogger;
     }
 
     /// <summary>
     /// Generates a chat completion for the provided request and returns the final response.
     /// </summary>
     /// <param name="request">Chat completion request</param>
+    /// <param name="requestId">Unique identifier for request tracking</param>
+    /// <param name="token">Cancellation token</param>
     /// <returns>Chat completion response</returns>
-    public async IAsyncEnumerable<ChatCompletionResponse> GenerateChatCompletionAsync(ChatCompletionRequest request, CancellationToken token)
+    public async IAsyncEnumerable<ChatCompletionResponse> GenerateChatCompletionAsync(ChatCompletionRequest request, string requestId, CancellationToken token)
     {
         using var scope = _serviceProvider.CreateScope();
         var streamingEngine = scope.ServiceProvider.GetRequiredService<StreamingInferenceEngine>();
         var harmonyFormatter = scope.ServiceProvider.GetRequiredService<HarmonyFormatter>();
 
         var requestedModel = request.Model ?? "gpt-4";
-        _logger.LogInformation("Requested model: {RequestedModel}", requestedModel);
+        _logger.LogInformation("[{RequestId}] Requested model: {RequestedModel}", requestId, requestedModel);
 
         // Validate tool definitions if provided
         if (request.Tools?.Any() == true)
@@ -55,7 +61,7 @@ public class LLamaSharpService : IDisposable
             {
                 var errorMessage = "Invalid function definitions: " + 
                     string.Join("; ", validationResults.SelectMany(kvp => kvp.Value.Select(err => $"{kvp.Key}: {err}")));
-                _logger.LogError("Tool validation failed: {ValidationErrors}", errorMessage);
+                _logger.LogError("[{RequestId}] Tool validation failed: {ValidationErrors}", requestId, errorMessage);
                 throw new ArgumentException(errorMessage);
             }
         }
@@ -67,7 +73,7 @@ public class LLamaSharpService : IDisposable
         }
         catch (ArgumentException ex)
         {
-            _logger.LogError(ex, "Invalid model requested: {ModelName}", requestedModel);
+            _logger.LogError(ex, "[{RequestId}] Invalid model requested: {ModelName}", requestId, requestedModel);
             throw new ArgumentException($"Model '{requestedModel}' is not available. Use /v1/models to see available models.", ex);
         }
         // Prepare messages with default system prompt if needed
@@ -77,7 +83,7 @@ public class LLamaSharpService : IDisposable
         ChatCompletionResponse? finalResponse = null;
         var reasoningTokens = 0;
 
-        await foreach (var result in streamingEngine.GenerateStreamAsync(allMessages, request, modelInstance, cancellationToken: token))
+        await foreach (var result in streamingEngine.GenerateStreamAsync(allMessages, request, modelInstance, requestId, token))
         {
             yield return result;
         }

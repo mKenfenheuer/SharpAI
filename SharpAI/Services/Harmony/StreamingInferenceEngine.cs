@@ -17,15 +17,18 @@ public class StreamingInferenceEngine
     private readonly ILogger<StreamingInferenceEngine> _logger;
     private readonly HarmonyFormatter _formatter;
     private readonly HarmonyParser _parser;
+    private readonly RequestLogger _requestLogger;
 
     public StreamingInferenceEngine(
         ILogger<StreamingInferenceEngine> logger,
         HarmonyFormatter formatter,
-        HarmonyParser parser)
+        HarmonyParser parser,
+        RequestLogger requestLogger)
     {
         _logger = logger;
         _formatter = formatter;
         _parser = parser;
+        _requestLogger = requestLogger;
     }
 
     /// <summary>
@@ -36,10 +39,11 @@ public class StreamingInferenceEngine
         List<ChatMessage> messages,
         ChatCompletionRequest request,
         ModelInstance modelInstance,
+        string requestId,
         [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
-        _logger.LogInformation("Starting streaming inference for model: {Model} with {MessageCount} messages",
-            request.Model, messages.Count);
+        _logger.LogInformation("[{RequestId}] Starting streaming inference for model: {Model} with {MessageCount} messages",
+            requestId, request.Model, messages.Count);
 
         // Check if tools are available and should be used
         if (request.ToolChoice == ToolChoice.None)
@@ -55,6 +59,17 @@ public class StreamingInferenceEngine
 
         // Apply harmony format to the prompt
         var formattedPrompt = _formatter.FormatHarmonyConversation(conversation);
+        
+        // Log formatted prompt
+        _logger.LogInformation("[{RequestId}] Formatted prompt for model", requestId);
+        _logger.LogDebug("[{RequestId}] Formatted prompt: {Prompt}", requestId, formattedPrompt);
+        await _requestLogger.LogFormattedPromptAsync(requestId, formattedPrompt, new
+        {
+            Model = request.Model,
+            MessageCount = messages.Count,
+            HasTools = request.Tools?.Any() ?? false,
+            ToolCount = request.Tools?.Count ?? 0
+        });
 
         // Pass the predefined next turn role to the parser
         var nextTurnToken = new[] { "<|start|>", "assistant" };
@@ -76,24 +91,24 @@ public class StreamingInferenceEngine
 
         startInference:
 
-        await foreach (var inferResponse in InferAsync(modelInstance, formattedPrompt, request, messages, grammar, cancellationToken))
+        await foreach (var inferResponse in InferAsync(modelInstance, formattedPrompt, request, messages, grammar, requestId, cancellationToken))
         {
             if (cancellationToken.IsCancellationRequested)
             {
-                _logger.LogInformation("Streaming inference cancelled by user");
+                _logger.LogInformation("[{RequestId}] Streaming inference cancelled by user", requestId);
                 yield break;
             }
 
             if (inferResponse.ExitReason == InferExitReason.ParsingFailed)
             {
-                _logger.LogError("Parsing failed during streaming inference. Aborting.");
+                _logger.LogError("[{RequestId}] Parsing failed during streaming inference. Aborting.", requestId);
 
                 // We need to reset the parser state for continued inference
                 _parser.ResetParserState();
 
                 // Continue inference with tool results using recursive call
                 await foreach (var continuedResult in GenerateStreamAsync(
-                    messages, request, modelInstance, cancellationToken))
+                    messages, request, modelInstance, requestId, cancellationToken))
                 {
                     yield return continuedResult;
                 }
@@ -123,7 +138,7 @@ public class StreamingInferenceEngine
 
         if (continueWithGrammar && grammar == null)
         {
-            _logger.LogInformation("Continuing inference with grammar-based response format validation");
+            _logger.LogInformation("[{RequestId}] Continuing inference with grammar-based response format validation", requestId);
 
             grammar = BuildResponseFormatGrammar(request.ResponseFormat!);
 
@@ -134,7 +149,7 @@ public class StreamingInferenceEngine
 
         if (continueWithFunctionGrammar && grammar == null)
         {
-            _logger.LogInformation("Continuing inference with grammar-based tool argument format validation");
+            _logger.LogInformation("[{RequestId}] Continuing inference with grammar-based tool argument format validation", requestId);
             var tools = conversation.SelectMany(m => m.Content)
                         .Where(c => c.Tools != null)
                         .SelectMany(c => c.Tools);
@@ -152,6 +167,17 @@ public class StreamingInferenceEngine
         }
 
         var completeMessages = _parser.GetResponse();
+        
+        // Log raw model response
+        _logger.LogInformation("[{RequestId}] Model inference completed", requestId);
+        _logger.LogDebug("[{RequestId}] Raw model response: {RawResponse}", requestId, _parser.RawResponse);
+        await _requestLogger.LogModelResponseAsync(requestId, _parser.RawResponse, new
+        {
+            ReasoningTokens = _parser.ReasoningTokens,
+            CompletionTokens = _parser.CompletionTokens,
+            PromptTokens = LLamaUtilities.EstimateTokens(formattedPrompt),
+            FinishReason = completeMessages.ToolCall != null ? "tool_calls" : "stop"
+        });
 
         // Send final result
         yield return completeMessages.CreateChatCompletionResponse(
@@ -164,13 +190,13 @@ public class StreamingInferenceEngine
                         _parser.CompletionTokens);
     }
 
-    private async IAsyncEnumerable<InferResponse<ChatCompletionResponse>> InferAsync(ModelInstance modelInstance, string formattedPrompt, ChatCompletionRequest request, List<ChatMessage> messages, Grammar? grammar, CancellationToken cancellationToken)
+    private async IAsyncEnumerable<InferResponse<ChatCompletionResponse>> InferAsync(ModelInstance modelInstance, string formattedPrompt, ChatCompletionRequest request, List<ChatMessage> messages, Grammar? grammar, string requestId, CancellationToken cancellationToken)
     {
         await foreach (var token in modelInstance.InferAsync(request, formattedPrompt, grammar))
         {
             if (cancellationToken.IsCancellationRequested)
             {
-                _logger.LogInformation("Streaming inference cancelled by user");
+                _logger.LogInformation("[{RequestId}] Streaming inference cancelled by user", requestId);
                 break;
             }
             var delta = _parser.ParseToken(token);

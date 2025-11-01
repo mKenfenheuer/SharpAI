@@ -1,0 +1,5 @@
+# Ignore request logs
+*.jsonl
+
+# Keep directory structure
+!.gitignore
