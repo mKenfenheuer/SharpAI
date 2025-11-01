@@ -91,7 +91,7 @@ namespace SharpAI.Models
         /// Controls which (if any) tool is called by the model.
         /// </summary>
         [JsonPropertyName("tool_choice")]
-        public ToolChoice? ToolChoice { get; set; }
+        public ToolChoice? ToolChoice { get; set; } = null;
 
         /// <summary>
         /// A list of tools the model may call. Currently, only functions are supported as a tool.

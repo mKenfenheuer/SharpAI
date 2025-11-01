@@ -9,11 +9,7 @@ namespace SharpAI.Models
     /// </summary>
     [JsonConverter(typeof(LowercaseEnumConverter<ToolChoice>))]
     public enum ToolChoice 
-    { 
-        /// <summary>
-        /// The model will not call any tools and instead generates a message.
-        /// </summary>
-        None, 
+    {
         /// <summary>
         /// The model can pick between generating a message or calling one or more tools.
         /// </summary>

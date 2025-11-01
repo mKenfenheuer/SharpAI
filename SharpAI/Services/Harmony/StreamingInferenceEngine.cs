@@ -45,12 +45,6 @@ public class StreamingInferenceEngine
         _logger.LogInformation("[{RequestId}] Starting streaming inference for model: {Model} with {MessageCount} messages",
             requestId, request.Model, messages.Count);
 
-        // Check if tools are available and should be used
-        if (request.ToolChoice == ToolChoice.None)
-        {
-            request.Tools = null;
-        }
-
         var conversation = _formatter.ConvertToHarmonyConversation(
             messages,
             request.ReasoningEffort ?? ReasoningEffortLevel.Low,
