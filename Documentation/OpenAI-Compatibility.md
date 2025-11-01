@@ -20,7 +20,7 @@ SharpAI provides an **OpenAI-compatible API with extensions** for enhanced trans
 - `max_tokens` - Maximum tokens to generate
 - `stream` - Enable streaming responses
 - `tools` - Function calling support
-- `tool_choice` - Tool selection control
+- `tool_choice` - Tool selection control (supports both string modes: `"none"`, `"auto"`, `"required"`, and object form for specific function selection)
 - All other standard OpenAI parameters
 
 #### Response Fields

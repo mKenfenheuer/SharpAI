@@ -89,6 +89,11 @@ namespace SharpAI.Models
 
         /// <summary>
         /// Controls which (if any) tool is called by the model.
+        /// Can be a string ("none", "auto", "required") or an object specifying a specific tool.
+        /// - "none": The model will not call any tool and instead generates a message.
+        /// - "auto": The model can pick between generating a message or calling one or more tools.
+        /// - "required": The model must call one or more tools.
+        /// - Object: {"type": "function", "function": {"name": "my_function"}} forces the model to call that tool.
         /// </summary>
         [JsonPropertyName("tool_choice")]
         public ToolChoice? ToolChoice { get; set; } = null;
