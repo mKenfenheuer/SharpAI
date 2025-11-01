@@ -83,12 +83,12 @@ namespace SharpAI.Api.Chat
                 // Log request to JSONL file
                 await _requestLogger.LogRequestAsync(requestId, request);
                 
-                // Validate request
-                if (request.Messages == null || !request.Messages.Any())
+                // Validate request with detailed error reporting
+                var validationError = ValidateRequest(request);
+                if (validationError != null)
                 {
-                    var error = new { error = new { message = "Messages cannot be empty", type = "invalid_request_error" } };
-                    await _requestLogger.LogErrorAsync(requestId, "Messages cannot be empty");
-                    return BadRequest(error);
+                    await _requestLogger.LogErrorAsync(requestId, validationError.Message);
+                    return BadRequest(new { error = new { message = validationError.Message, type = "invalid_request_error", param = validationError.Parameter } });
                 }
 
                 // Check if streaming is requested
@@ -105,7 +105,7 @@ namespace SharpAI.Api.Chat
             {
                 _logger.LogError(ex, "[{RequestId}] Error processing chat completion request", requestId);
                 await _requestLogger.LogErrorAsync(requestId, ex.Message, ex.StackTrace);
-                return StatusCode(500, new { error = new { message = ex.Message, type = ex.GetType().Name } });
+                return StatusCode(500, new { requestId = requestId, error = new { message = ex.Message, type = ex.GetType().Name } });
             }
         }
 
@@ -275,7 +275,7 @@ namespace SharpAI.Api.Chat
                 _logger.LogError(ex, "[{RequestId}] Error during streaming chat completion", requestId);
                 await _requestLogger.LogErrorAsync(requestId, ex.Message, ex.StackTrace);
                 
-                var errorResponse = new { error = new { message = "Stream error", type = "internal_error" } };
+                var errorResponse = new { requestId = requestId, error = new { message = ex.Message, type = ex.GetType().Name } };
                 var errorJson = JsonSerializer.Serialize(errorResponse);
                 cts.Cancel();
                 await Response.WriteAsync($"data: {errorJson}\n\n");
@@ -284,6 +284,216 @@ namespace SharpAI.Api.Chat
 
             await Response.CompleteAsync();
             return new EmptyResult();
+        }
+
+        /// <summary>
+        /// Validates the chat completion request and returns detailed error information.
+        /// </summary>
+        /// <param name="request">The request to validate</param>
+        /// <returns>A ValidationError if validation fails, null if validation succeeds</returns>
+        private ValidationError? ValidateRequest(ChatCompletionRequest request)
+        {
+            // Validate messages
+            if (request.Messages == null)
+            {
+                return new ValidationError("messages", "'messages' field is required and cannot be null");
+            }
+
+            if (!request.Messages.Any())
+            {
+                return new ValidationError("messages", "'messages' array cannot be empty - at least one message is required");
+            }
+
+            // Validate each message
+            for (int i = 0; i < request.Messages.Count; i++)
+            {
+                var message = request.Messages[i];
+                
+                // Check if role is valid (we can't directly check for "None" since it doesn't exist)
+                // Instead, check if it's one of the valid values
+                if (message.Role != ChatRole.System && 
+                    message.Role != ChatRole.User && 
+                    message.Role != ChatRole.Assistant && 
+                    message.Role != ChatRole.Tool)
+                {
+                    return new ValidationError($"messages[{i}].role", $"Message at index {i} has invalid 'role' field. Must be one of: system, user, assistant, tool");
+                }
+
+                // Check for content in non-tool messages
+                if (message.Role != ChatRole.Tool)
+                {
+                    bool hasContent = !string.IsNullOrEmpty(message.Content);
+                    bool hasToolCalls = message.ToolCalls != null && message.ToolCalls.Any();
+                    
+                    if (!hasContent && !hasToolCalls)
+                    {
+                        return new ValidationError($"messages[{i}].content", $"Message at index {i} must have either 'content' or 'tool_calls'");
+                    }
+                }
+                else
+                {
+                    // Tool messages require tool_call_id and content
+                    if (string.IsNullOrEmpty(message.ToolCallId))
+                    {
+                        return new ValidationError($"messages[{i}].tool_call_id", $"Tool message at index {i} must have 'tool_call_id'");
+                    }
+                    
+                    if (string.IsNullOrEmpty(message.Content))
+                    {
+                        return new ValidationError($"messages[{i}].content", $"Tool message at index {i} must have 'content'");
+                    }
+                }
+
+                // Validate tool calls if present
+                if (message.ToolCalls != null)
+                {
+                    for (int j = 0; j < message.ToolCalls.Count; j++)
+                    {
+                        var toolCall = message.ToolCalls[j];
+                        
+                        if (string.IsNullOrEmpty(toolCall.CallId))
+                        {
+                            return new ValidationError($"messages[{i}].tool_calls[{j}].id", $"Tool call at messages[{i}].tool_calls[{j}] must have 'id'");
+                        }
+                        
+                        if (toolCall.Type != ToolType.Function)
+                        {
+                            return new ValidationError($"messages[{i}].tool_calls[{j}].type", $"Tool call at messages[{i}].tool_calls[{j}] must have 'type' set to 'function'");
+                        }
+                        
+                        if (toolCall.Function == null)
+                        {
+                            return new ValidationError($"messages[{i}].tool_calls[{j}].function", $"Tool call at messages[{i}].tool_calls[{j}] must have 'function' object");
+                        }
+                        
+                        if (string.IsNullOrEmpty(toolCall.Function.Name))
+                        {
+                            return new ValidationError($"messages[{i}].tool_calls[{j}].function.name", $"Function at messages[{i}].tool_calls[{j}].function must have 'name'");
+                        }
+                    }
+                }
+            }
+
+            // Validate model
+            if (string.IsNullOrWhiteSpace(request.Model))
+            {
+                return new ValidationError("model", "'model' field is required and cannot be empty");
+            }
+
+            // Validate temperature
+            if (request.Temperature.HasValue && (request.Temperature.Value < 0 || request.Temperature.Value > 2))
+            {
+                return new ValidationError("temperature", $"'temperature' must be between 0 and 2, got {request.Temperature.Value}");
+            }
+
+            // Validate top_p
+            if (request.TopP.HasValue && (request.TopP.Value < 0 || request.TopP.Value > 1))
+            {
+                return new ValidationError("top_p", $"'top_p' must be between 0 and 1, got {request.TopP.Value}");
+            }
+
+            // Validate frequency_penalty
+            if (request.FrequencyPenalty.HasValue && (request.FrequencyPenalty.Value < -2 || request.FrequencyPenalty.Value > 2))
+            {
+                return new ValidationError("frequency_penalty", $"'frequency_penalty' must be between -2.0 and 2.0, got {request.FrequencyPenalty.Value}");
+            }
+
+            // Validate presence_penalty
+            if (request.PresencePenalty.HasValue && (request.PresencePenalty.Value < -2 || request.PresencePenalty.Value > 2))
+            {
+                return new ValidationError("presence_penalty", $"'presence_penalty' must be between -2.0 and 2.0, got {request.PresencePenalty.Value}");
+            }
+
+            // Validate max_tokens / max_completion_tokens
+            if (request.MaxTokens.HasValue && request.MaxTokens.Value < 1)
+            {
+                return new ValidationError("max_tokens", $"'max_tokens' must be at least 1, got {request.MaxTokens.Value}");
+            }
+
+            if (request.MaxCompletionTokens.HasValue && request.MaxCompletionTokens.Value < 1)
+            {
+                return new ValidationError("max_completion_tokens", $"'max_completion_tokens' must be at least 1, got {request.MaxCompletionTokens.Value}");
+            }
+
+            // Validate tools
+            if (request.Tools != null)
+            {
+                for (int i = 0; i < request.Tools.Count; i++)
+                {
+                    var tool = request.Tools[i];
+                    
+                    if (tool.Type != ToolType.Function)
+                    {
+                        return new ValidationError($"tools[{i}].type", $"Tool at index {i} must have 'type' set to 'function' (currently the only supported type)");
+                    }
+                    
+                    if (tool.Function == null)
+                    {
+                        return new ValidationError($"tools[{i}].function", $"Tool at index {i} must have 'function' object");
+                    }
+                    
+                    if (string.IsNullOrEmpty(tool.Function.Name))
+                    {
+                        return new ValidationError($"tools[{i}].function.name", $"Function at tools[{i}].function must have 'name'");
+                    }
+                }
+            }
+
+            // Validate response_format
+            if (request.ResponseFormat != null)
+            {
+                if (request.ResponseFormat.Type != ResponseFormatType.Text && 
+                    request.ResponseFormat.Type != ResponseFormatType.JsonObject && 
+                    request.ResponseFormat.Type != ResponseFormatType.JsonSchema)
+                {
+                    return new ValidationError("response_format.type", "'response_format.type' must be one of: text, json_object, json_schema");
+                }
+                
+                if (request.ResponseFormat.Type == ResponseFormatType.JsonSchema)
+                {
+                    if (request.ResponseFormat.JsonSchema == null)
+                    {
+                        return new ValidationError("response_format.json_schema", "When 'response_format.type' is 'json_schema', 'json_schema' field is required");
+                    }
+                    
+                    if (string.IsNullOrEmpty(request.ResponseFormat.JsonSchema.Name))
+                    {
+                        return new ValidationError("response_format.json_schema.name", "'response_format.json_schema.name' is required");
+                    }
+                    
+                    if (request.ResponseFormat.JsonSchema.Schema == null)
+                    {
+                        return new ValidationError("response_format.json_schema.schema", "'response_format.json_schema.schema' is required and must be a valid JSON schema object");
+                    }
+                }
+            }
+
+            // Validate reasoning_effort
+            if (request.ReasoningEffort.HasValue && 
+                request.ReasoningEffort.Value != ReasoningEffortLevel.Minimal &&
+                request.ReasoningEffort.Value != ReasoningEffortLevel.Low && 
+                request.ReasoningEffort.Value != ReasoningEffortLevel.Medium && 
+                request.ReasoningEffort.Value != ReasoningEffortLevel.High)
+            {
+                return new ValidationError("reasoning_effort", "'reasoning_effort' must be one of: minimal, low, medium, high");
+            }
+
+            return null; // Validation passed
+        }
+
+        /// <summary>
+        /// Represents a validation error with parameter and message details.
+        /// </summary>
+        private class ValidationError
+        {
+            public string Parameter { get; }
+            public string Message { get; }
+
+            public ValidationError(string parameter, string message)
+            {
+                Parameter = parameter;
+                Message = message;
+            }
         }
     }
 }
