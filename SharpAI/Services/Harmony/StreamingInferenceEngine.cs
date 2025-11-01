@@ -138,13 +138,20 @@ public class StreamingInferenceEngine
 
         if (continueWithGrammar && grammar == null)
         {
-            _logger.LogInformation("[{RequestId}] Continuing inference with grammar-based response format validation", requestId);
+            if (request.ResponseFormat == null)
+            {
+                _logger.LogWarning("[{RequestId}] Grammar continuation requested but ResponseFormat is null. Skipping grammar validation.", requestId);
+            }
+            else
+            {
+                _logger.LogInformation("[{RequestId}] Continuing inference with grammar-based response format validation", requestId);
 
-            grammar = BuildResponseFormatGrammar(request.ResponseFormat!);
+                grammar = BuildResponseFormatGrammar(request.ResponseFormat);
 
-            formattedPrompt += _parser.RawResponse;
+                formattedPrompt += _parser.RawResponse;
 
-            goto startInference;
+                goto startInference;
+            }
         }
 
         if (continueWithFunctionGrammar && grammar == null)
@@ -155,15 +162,23 @@ public class StreamingInferenceEngine
                         .SelectMany(c => c.Tools);
             var tool = tools.FirstOrDefault(t => t.Name == _parser.ToolCallRecipient);
 
-            grammar = BuildResponseFormatGrammar(new ResponseFormat
+            if (tool == null)
             {
-                Type = ResponseFormatType.JsonSchema,
-                JsonSchema = tool.GetJsonSchema()
-            });
+                _logger.LogError("[{RequestId}] Tool '{ToolName}' not found in conversation. Cannot apply grammar validation.", requestId, _parser.ToolCallRecipient);
+                // Continue without grammar validation
+            }
+            else
+            {
+                grammar = BuildResponseFormatGrammar(new ResponseFormat
+                {
+                    Type = ResponseFormatType.JsonSchema,
+                    JsonSchema = tool.GetJsonSchema()
+                });
 
-            formattedPrompt += _parser.RawResponse;
+                formattedPrompt += _parser.RawResponse;
 
-            goto startInference;
+                goto startInference;
+            }
         }
 
         var completeMessages = _parser.GetResponse();
