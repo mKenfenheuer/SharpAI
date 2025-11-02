@@ -46,6 +46,11 @@ public class Program
         // Register llama and whisper services
         builder.Services.AddSingleton<SharpAI.Services.LLamaSharpService>();
         builder.Services.AddSingleton<SharpAI.Services.WhisperService>();
+        
+        // Register TTS service as hosted service
+        builder.Services.AddSingleton<SharpAI.ChatterboxService>();
+        builder.Services.AddHostedService<SharpAI.ChatterboxService>(provider => 
+            provider.GetRequiredService<SharpAI.ChatterboxService>());
 
         // Configure form options for large file uploads
         builder.Services.Configure<FormOptions>(options =>
