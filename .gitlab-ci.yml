@@ -5,6 +5,7 @@ before_script:
   - export CI_ENVIRONMENT_HOST=$(echo $CI_ENVIRONMENT_URL | sed 's~http[s]*://~~g')
 
 stages:
+ - base
  - build
  - deploy
 
@@ -15,10 +16,29 @@ stages:
 #    - build
 #  script:
 #    - docker login -u $CI_REGISTRY_USER -p $CI_REGISTRY_PASSWORD $CI_REGISTRY
-#    - docker build -t sharpai-cpu -f SharpAI/Dockerfile SharpAI/
-#    - docker image tag sharpai-cpu $CI_REGISTRY_IMAGE:cpu-$CI_COMMIT_SHORT_SHA
+#    - echo $DOCKER_HUB_TOKEN | docker login -u $DOCKER_HUB_USERNAME --password-stdin
+#    - docker pull $DOCKER_HUB_USERNAME/$CI_PROJECT_NAME-cuda-base:latest || true
+#    - docker build -t $CI_PROJECT_NAME-cpu -f $CI_PROJECT_NAME/Dockerfile $CI_PROJECT_NAME/
+#    - docker image tag $CI_PROJECT_NAME-cpu $CI_REGISTRY_IMAGE:cpu-$CI_COMMIT_SHORT_SHA
 #    - docker image push $CI_REGISTRY_IMAGE:cpu-$CI_COMMIT_SHORT_SHA
 #    - docker image prune -a
+
+build_cuda_base_image:
+  stage: base
+  tags:
+    - docker
+    - build
+  only:
+    changes:
+      - Dockerfile.cuda.base
+  script:
+    - echo $DOCKER_HUB_TOKEN | docker login -u $DOCKER_HUB_USERNAME --password-stdin
+    - docker build -t $CI_PROJECT_NAME-cuda-base -f Dockerfile.cuda.base .
+    - docker image tag $CI_PROJECT_NAME-cuda-base $DOCKER_HUB_USERNAME/$CI_PROJECT_NAME-cuda-base:latest
+    - docker image tag $CI_PROJECT_NAME-cuda-base $DOCKER_HUB_USERNAME/$CI_PROJECT_NAME-cuda-base:$CI_COMMIT_SHORT_SHA
+    - docker image push $DOCKER_HUB_USERNAME/$CI_PROJECT_NAME-cuda-base:latest
+    - docker image push $DOCKER_HUB_USERNAME/$CI_PROJECT_NAME-cuda-base:$CI_COMMIT_SHORT_SHA
+    - docker image prune -a
 
 build_cuda_image:
   stage: build
@@ -27,8 +47,10 @@ build_cuda_image:
     - build
   script:
     - docker login -u $CI_REGISTRY_USER -p $CI_REGISTRY_PASSWORD $CI_REGISTRY
-    - docker build -t sharpai-cuda -f Dockerfile.cuda .
-    - docker image tag sharpai-cuda $CI_REGISTRY_IMAGE:cuda-$CI_COMMIT_SHORT_SHA
+    - echo $DOCKER_HUB_TOKEN | docker login -u $DOCKER_HUB_USERNAME --password-stdin
+    - docker pull $DOCKER_HUB_USERNAME/$CI_PROJECT_NAME-cuda-base:latest || true
+    - docker build -t $CI_PROJECT_NAME-cuda -f Dockerfile.cuda .
+    - docker image tag $CI_PROJECT_NAME-cuda $CI_REGISTRY_IMAGE:cuda-$CI_COMMIT_SHORT_SHA
     - docker image push $CI_REGISTRY_IMAGE:cuda-$CI_COMMIT_SHORT_SHA
     - docker image prune -a
 
@@ -46,4 +68,4 @@ deploy_production:
   script:
     - docker login -u $CI_REGISTRY_USER -p $CI_REGISTRY_PASSWORD $CI_REGISTRY
     - docker stop $CI_PROJECT_NAME || true && docker rm $CI_PROJECT_NAME || true
-    - docker run -d --name $CI_PROJECT_NAME -p 0.0.0.0:12080:80 -h sharpai.ksol.it -v /ssd/docker/data/sharpai/:/app/Data/ --gpus all $CI_REGISTRY_IMAGE:cuda-$CI_COMMIT_SHORT_SHA
+    - docker run -d --name $CI_PROJECT_NAME -p 0.0.0.0:12080:80 -h $CI_PROJECT_NAME.ksol.it -v /ssd/docker/data/$CI_PROJECT_NAME/:/app/Data/ --gpus all $CI_REGISTRY_IMAGE:cuda-$CI_COMMIT_SHORT_SHA
