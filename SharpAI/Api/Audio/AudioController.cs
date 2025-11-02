@@ -13,12 +13,14 @@ public class AudioController : ControllerBase
     private readonly WhisperHostedService _whisperService;
     private readonly ChatterboxService _chatterboxService;
     private readonly ILogger<AudioController> _logger;
+    private readonly RequestLogger _requestLogger;
 
-    public AudioController(WhisperHostedService whisperService, ChatterboxService chatterboxService, ILogger<AudioController> logger)
+    public AudioController(WhisperHostedService whisperService, ChatterboxService chatterboxService, ILogger<AudioController> logger, RequestLogger requestLogger)
     {
         _whisperService = whisperService;
         _chatterboxService = chatterboxService;
         _logger = logger;
+        _requestLogger = requestLogger;
     }
 
     [HttpPost("transcriptions")]
@@ -26,11 +28,33 @@ public class AudioController : ControllerBase
     [DisableRequestSizeLimit]
     public async Task<IActionResult> CreateTranscription([FromForm] AudioTranscriptionFormRequest formRequest)
     {
+        var requestId = Guid.NewGuid().ToString("N");
+        
         try
         {
+            _logger.LogInformation("[{RequestId}] Received audio transcription request for file: {FileName} ({Size} bytes)",
+                requestId, formRequest.File?.FileName, formRequest.File?.Length);
+            
+            // Log request to JSONL file
+            await _requestLogger.LogRequestAsync(requestId, new
+            {
+                Endpoint = "transcriptions",
+                FileName = formRequest.File?.FileName,
+                FileSize = formRequest.File?.Length,
+                ContentType = formRequest.File?.ContentType,
+                Model = formRequest.Model,
+                Language = formRequest.Language,
+                Prompt = formRequest.Prompt,
+                ResponseFormat = formRequest.ResponseFormat,
+                Temperature = formRequest.Temperature,
+                TimestampGranularities = formRequest.TimestampGranularities,
+                Stream = formRequest.Stream
+            });
+
             // Validate file
             if (formRequest.File == null || formRequest.File.Length == 0)
             {
+                await _requestLogger.LogErrorAsync(requestId, "No audio file provided");
                 return BadRequest(new { error = new { message = "No audio file provided", type = "invalid_request_error" } });
             }
 
@@ -38,11 +62,12 @@ public class AudioController : ControllerBase
             var allowedTypes = new[] { "audio/mpeg", "audio/mp4", "audio/wav", "audio/webm", "audio/m4a", "audio/ogg", "audio/flac" };
             if (!allowedTypes.Contains(formRequest.File.ContentType?.ToLower()))
             {
+                await _requestLogger.LogErrorAsync(requestId, $"Invalid audio file type: {formRequest.File.ContentType}");
                 return BadRequest(new { error = new { message = "Invalid audio file type", type = "invalid_request_error" } });
             }
 
-            _logger.LogInformation("Processing audio transcription for file: {FileName} ({Size} bytes)",
-                formRequest.File.FileName, formRequest.File.Length);
+            _logger.LogInformation("[{RequestId}] Processing audio transcription for file: {FileName} ({Size} bytes)",
+                requestId, formRequest.File.FileName, formRequest.File.Length);
 
             // Convert form request to model request
             var request = new AudioTranscriptionRequest
@@ -59,21 +84,22 @@ public class AudioController : ControllerBase
             // Check if streaming is requested (custom extension)
             if (formRequest.Stream == true)
             {
-                return await HandleStreamingTranscription(request);
+                return await HandleStreamingTranscription(request, requestId);
             }
             else
             {
-                return await HandleTranscription(request);
+                return await HandleTranscription(request, requestId);
             }
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Error processing audio transcription");
-            return StatusCode(500, new { error = new { message = ex.Message, type = ex.GetType().Name } });
+            _logger.LogError(ex, "[{RequestId}] Error processing audio transcription", requestId);
+            await _requestLogger.LogErrorAsync(requestId, ex.Message, ex.StackTrace);
+            return StatusCode(500, new { requestId = requestId, error = new { message = ex.Message, type = ex.GetType().Name } });
         }
     }
 
-    private async Task<IActionResult> HandleTranscription(AudioTranscriptionRequest request)
+    private async Task<IActionResult> HandleTranscription(AudioTranscriptionRequest request, string requestId)
     {
         using var originalAudioStream = request.File!.OpenReadStream();
 
@@ -85,6 +111,16 @@ public class AudioController : ControllerBase
         var response = await _whisperService.TranscribeAsync(convertedAudioStream, request);
 
         var responseFormat = request.ResponseFormat ?? AudioResponseFormat.Json;
+
+        // Log final response
+        _logger.LogInformation("[{RequestId}] Completed audio transcription", requestId);
+        await _requestLogger.LogFinalResponseAsync(requestId, new
+        {
+            ResponseFormat = responseFormat.ToString(),
+            Text = response.Text,
+            SegmentCount = response.Segments?.Count ?? 0,
+            Duration = response.Duration
+        });
 
         // Handle different response formats
         return responseFormat switch
@@ -118,8 +154,10 @@ public class AudioController : ControllerBase
         };
     }
 
-    private async Task<IActionResult> HandleStreamingTranscription(AudioTranscriptionRequest request)
+    private async Task<IActionResult> HandleStreamingTranscription(AudioTranscriptionRequest request, string requestId)
     {
+        _logger.LogInformation("[{RequestId}] Processing streaming audio transcription", requestId);
+        
         Response.Headers["Content-Type"] = "text/event-stream";
         Response.Headers["Cache-Control"] = "no-cache";
         Response.Headers["Connection"] = "keep-alive";
@@ -130,6 +168,8 @@ public class AudioController : ControllerBase
         using var convertedAudioStream = await _whisperService.ConvertToWav16kHzAsync(
             originalAudioStream,
             request.File.FileName ?? "audio");
+
+        var completeResponse = new System.Text.StringBuilder();
 
         await foreach (var chunk in _whisperService.TranscribeStreamAsync(convertedAudioStream, request))
         {
@@ -142,12 +182,25 @@ public class AudioController : ControllerBase
             await Response.WriteAsync($"data: {json}\n\n");
             await Response.Body.FlushAsync();
 
+            if (!string.IsNullOrEmpty(chunk.Text))
+            {
+                completeResponse.Append(chunk.Text);
+            }
+
             if (chunk.IsFinal)
                 break;
         }
 
         await Response.WriteAsync("data: [DONE]\n\n");
         await Response.Body.FlushAsync();
+
+        // Log final response
+        _logger.LogInformation("[{RequestId}] Completed streaming audio transcription", requestId);
+        await _requestLogger.LogFinalResponseAsync(requestId, new
+        {
+            StreamingResponse = true,
+            CompleteText = completeResponse.ToString()
+        });
 
         return new EmptyResult();
     }
@@ -157,17 +210,37 @@ public class AudioController : ControllerBase
     [DisableRequestSizeLimit]
     public async Task<IActionResult> CreateTranslation([FromForm] AudioTranscriptionFormRequest formRequest)
     {
+        var requestId = Guid.NewGuid().ToString("N");
+        
         // For now, translation uses the same logic as transcription
         // In a full implementation, you would configure Whisper for translation mode
         try
         {
+            _logger.LogInformation("[{RequestId}] Received audio translation request for file: {FileName} ({Size} bytes)",
+                requestId, formRequest.File?.FileName, formRequest.File?.Length);
+            
+            // Log request to JSONL file
+            await _requestLogger.LogRequestAsync(requestId, new
+            {
+                Endpoint = "translations",
+                FileName = formRequest.File?.FileName,
+                FileSize = formRequest.File?.Length,
+                ContentType = formRequest.File?.ContentType,
+                Model = formRequest.Model,
+                Prompt = formRequest.Prompt,
+                ResponseFormat = formRequest.ResponseFormat,
+                Temperature = formRequest.Temperature,
+                TimestampGranularities = formRequest.TimestampGranularities
+            });
+
             // Validate file
             if (formRequest.File == null || formRequest.File.Length == 0)
             {
+                await _requestLogger.LogErrorAsync(requestId, "No audio file provided");
                 return BadRequest(new { error = new { message = "No audio file provided", type = "invalid_request_error" } });
             }
 
-            _logger.LogInformation("Processing audio translation for file: {FileName}", formRequest.File.FileName);
+            _logger.LogInformation("[{RequestId}] Processing audio translation for file: {FileName}", requestId, formRequest.File.FileName);
 
             // Force language to English for translation
             var request = new AudioTranscriptionRequest
@@ -194,6 +267,17 @@ public class AudioController : ControllerBase
             response.Task = "translate";
 
             var responseFormat = request.ResponseFormat ?? AudioResponseFormat.Json;
+
+            // Log final response
+            _logger.LogInformation("[{RequestId}] Completed audio translation", requestId);
+            await _requestLogger.LogFinalResponseAsync(requestId, new
+            {
+                ResponseFormat = responseFormat.ToString(),
+                Text = response.Text,
+                SegmentCount = response.Segments?.Count ?? 0,
+                Duration = response.Duration,
+                Task = response.Task
+            });
 
             // Handle different response formats
             return responseFormat switch
@@ -228,8 +312,9 @@ public class AudioController : ControllerBase
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Error processing audio translation");
-            return StatusCode(500, new { error = new { message = ex.Message, type = ex.GetType().Name } });
+            _logger.LogError(ex, "[{RequestId}] Error processing audio translation", requestId);
+            await _requestLogger.LogErrorAsync(requestId, ex.Message, ex.StackTrace);
+            return StatusCode(500, new { requestId = requestId, error = new { message = ex.Message, type = ex.GetType().Name } });
         }
     }
 
@@ -278,19 +363,41 @@ public class AudioController : ControllerBase
     [HttpPost("speech")]
     public async Task<IActionResult> CreateSpeech([FromBody] TtsRequest request)
     {
+        var requestId = Guid.NewGuid().ToString("N");
+        
         try
         {
-            _logger.LogInformation("Processing TTS request for text: {TextPreview}...",
-                request.Input.Length > 50 ? request.Input[..50] + "..." : request.Input);
+            _logger.LogInformation("[{RequestId}] Received TTS request for text: {TextPreview}...",
+                requestId, request.Input.Length > 50 ? request.Input[..50] + "..." : request.Input);
+            
+            // Log request to JSONL file
+            await _requestLogger.LogRequestAsync(requestId, new
+            {
+                Endpoint = "speech",
+                Input = request.Input,
+                Voice = request.Voice,
+                Model = request.Model,
+                ResponseFormat = request.ResponseFormat,
+                Speed = request.Speed,
+                EmotionIntensity = request.EmotionIntensity,
+                ReferenceAudio = request.ReferenceAudio,
+                CfgWeight = request.CfgWeight,
+                Exaggeration = request.Exaggeration
+            });
+
+            _logger.LogInformation("[{RequestId}] Processing TTS request for text: {TextPreview}...",
+                requestId, request.Input.Length > 50 ? request.Input[..50] + "..." : request.Input);
 
             // Validate input
             if (string.IsNullOrWhiteSpace(request.Input))
             {
+                await _requestLogger.LogErrorAsync(requestId, "Input text is required");
                 return BadRequest(new { error = new { message = "Input text is required", type = "invalid_request_error" } });
             }
 
             if (request.Input.Length > 4096)
             {
+                await _requestLogger.LogErrorAsync(requestId, $"Input text too long: {request.Input.Length} characters");
                 return BadRequest(new { error = new { message = "Input text cannot exceed 4096 characters", type = "invalid_request_error" } });
             }
 
@@ -298,30 +405,35 @@ public class AudioController : ControllerBase
             var supportedVoices = new[] { "alloy", "echo", "fable", "onyx", "nova", "shimmer" };
             if (!supportedVoices.Contains(request.Voice?.ToLower()))
             {
+                await _requestLogger.LogErrorAsync(requestId, $"Invalid voice: {request.Voice}");
                 return BadRequest(new { error = new { message = $"Invalid voice '{request.Voice}'. Supported voices: {string.Join(", ", supportedVoices)}", type = "invalid_request_error" } });
             }
 
             // Validate speed
             if (request.Speed < 0.25 || request.Speed > 4.0)
             {
+                await _requestLogger.LogErrorAsync(requestId, $"Invalid speed: {request.Speed}");
                 return BadRequest(new { error = new { message = "Speed must be between 0.25 and 4.0", type = "invalid_request_error" } });
             }
 
             // Validate emotion intensity (SharpAI extension)
             if (request.EmotionIntensity < 0.0f || request.EmotionIntensity > 1.0f)
             {
+                await _requestLogger.LogErrorAsync(requestId, $"Invalid emotion intensity: {request.EmotionIntensity}");
                 return BadRequest(new { error = new { message = "Emotion intensity must be between 0.0 and 1.0", type = "invalid_request_error" } });
             }
 
             // Validate cfg_weight (SharpAI extension)
             if (request.CfgWeight < 0.0f || request.CfgWeight > 1.0f)
             {
+                await _requestLogger.LogErrorAsync(requestId, $"Invalid CFG weight: {request.CfgWeight}");
                 return BadRequest(new { error = new { message = "CFG weight must be between 0.0 and 1.0", type = "invalid_request_error" } });
             }
 
             // Validate exaggeration (SharpAI extension)
             if (request.Exaggeration < 0.0f || request.Exaggeration > 1.0f)
             {
+                await _requestLogger.LogErrorAsync(requestId, $"Invalid exaggeration: {request.Exaggeration}");
                 return BadRequest(new { error = new { message = "Exaggeration must be between 0.0 and 1.0", type = "invalid_request_error" } });
             }
 
@@ -334,13 +446,27 @@ public class AudioController : ControllerBase
                 cfgWeight: request.CfgWeight ?? 0.5f,
                 exaggeration: request.Exaggeration ?? 0.5f);
 
+            // Log final response
+            _logger.LogInformation("[{RequestId}] Completed TTS request", requestId);
+            await _requestLogger.LogFinalResponseAsync(requestId, new
+            {
+                ResponseFormat = request.ResponseFormat,
+                AudioSizeBytes = audioStream.Length,
+                Voice = request.Voice,
+                Speed = request.Speed,
+                EmotionIntensity = request.EmotionIntensity,
+                CfgWeight = request.CfgWeight,
+                Exaggeration = request.Exaggeration
+            });
+
             // Return audio file
             return File(audioStream.ToArray(), GetContentType(request.ResponseFormat), $"speech.{request.ResponseFormat}");
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Error processing TTS request");
-            return StatusCode(500, new { error = new { message = ex.Message, type = ex.GetType().Name } });
+            _logger.LogError(ex, "[{RequestId}] Error processing TTS request", requestId);
+            await _requestLogger.LogErrorAsync(requestId, ex.Message, ex.StackTrace);
+            return StatusCode(500, new { requestId = requestId, error = new { message = ex.Message, type = ex.GetType().Name } });
         }
     }
 
@@ -354,19 +480,40 @@ public class AudioController : ControllerBase
     [RequestSizeLimit(50_000_000)] // 50MB limit for reference audio files
     public async Task<IActionResult> CreateSpeechWithForm([FromForm] TtsFormRequest formRequest)
     {
+        var requestId = Guid.NewGuid().ToString("N");
+        
         try
         {
-            _logger.LogInformation("Processing TTS form request for text: {TextPreview}...",
-                formRequest.Input.Length > 50 ? formRequest.Input[..50] + "..." : formRequest.Input);
+            _logger.LogInformation("[{RequestId}] Received TTS form request for text: {TextPreview}...",
+                requestId, formRequest.Input.Length > 50 ? formRequest.Input[..50] + "..." : formRequest.Input);
+            
+            // Log request to JSONL file
+            await _requestLogger.LogRequestAsync(requestId, new
+            {
+                Endpoint = "speech/form",
+                Input = formRequest.Input,
+                HasReferenceAudio = formRequest.ReferenceAudio != null && formRequest.ReferenceAudio.Length > 0,
+                ReferenceAudioSize = formRequest.ReferenceAudio?.Length,
+                ReferenceAudioFileName = formRequest.ReferenceAudio?.FileName,
+                ResponseFormat = formRequest.ResponseFormat,
+                EmotionIntensity = formRequest.EmotionIntensity,
+                CfgWeight = formRequest.CfgWeight,
+                Exaggeration = formRequest.Exaggeration
+            });
+
+            _logger.LogInformation("[{RequestId}] Processing TTS form request for text: {TextPreview}...",
+                requestId, formRequest.Input.Length > 50 ? formRequest.Input[..50] + "..." : formRequest.Input);
 
             // Validate input
             if (string.IsNullOrWhiteSpace(formRequest.Input))
             {
+                await _requestLogger.LogErrorAsync(requestId, "Input text is required");
                 return BadRequest(new { error = new { message = "Input text is required", type = "invalid_request_error" } });
             }
 
             if (formRequest.Input.Length > 4096)
             {
+                await _requestLogger.LogErrorAsync(requestId, $"Input text too long: {formRequest.Input.Length} characters");
                 return BadRequest(new { error = new { message = "Input text cannot exceed 4096 characters", type = "invalid_request_error" } });
             }
 
@@ -396,6 +543,18 @@ public class AudioController : ControllerBase
                     cfgWeight: formRequest.CfgWeight ?? 0.5f,
                     exaggeration: formRequest.Exaggeration ?? 0.5f);
 
+                // Log final response
+                _logger.LogInformation("[{RequestId}] Completed TTS form request", requestId);
+                await _requestLogger.LogFinalResponseAsync(requestId, new
+                {
+                    ResponseFormat = formRequest.ResponseFormat,
+                    AudioSizeBytes = audioStream.Length,
+                    HasReferenceAudio = referenceAudioPath != null,
+                    EmotionIntensity = formRequest.EmotionIntensity,
+                    CfgWeight = formRequest.CfgWeight,
+                    Exaggeration = formRequest.Exaggeration
+                });
+
                 // Return audio file
                 return File(audioStream.ToArray(), GetContentType(formRequest.ResponseFormat), $"speech.{formRequest.ResponseFormat}");
             }
@@ -410,15 +569,16 @@ public class AudioController : ControllerBase
                     }
                     catch (Exception ex)
                     {
-                        _logger.LogWarning(ex, "Failed to delete temporary reference audio file: {Path}", referenceAudioPath);
+                        _logger.LogWarning(ex, "[{RequestId}] Failed to delete temporary reference audio file: {Path}", requestId, referenceAudioPath);
                     }
                 }
             }
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Error processing TTS form request");
-            return StatusCode(500, new { error = new { message = ex.Message, type = ex.GetType().Name } });
+            _logger.LogError(ex, "[{RequestId}] Error processing TTS form request", requestId);
+            await _requestLogger.LogErrorAsync(requestId, ex.Message, ex.StackTrace);
+            return StatusCode(500, new { requestId = requestId, error = new { message = ex.Message, type = ex.GetType().Name } });
         }
     }
     private string GetContentType(string format)
