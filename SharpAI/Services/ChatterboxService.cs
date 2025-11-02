@@ -7,6 +7,7 @@ using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using System.Collections.Concurrent;
 using SharpAI.Models;
+using Microsoft.AspNetCore.Hosting;
 
 namespace SharpAI
 {
@@ -20,6 +21,7 @@ namespace SharpAI
         private readonly ChannelReader<TtsInternalRequest> _requestReader;
         private readonly ConcurrentDictionary<string, TaskCompletionSource<MemoryStream>> _pendingRequests;
         private readonly ILogger<ChatterboxService> _logger;
+        private readonly IWebHostEnvironment _environment;
 
         // Supported languages by ChatterboxMultilingualTTS
         private static readonly HashSet<string> SupportedLanguages = new HashSet<string>
@@ -35,9 +37,10 @@ namespace SharpAI
             "mp3", "wav"
         };
 
-        public ChatterboxService(ILogger<ChatterboxService> logger)
+        public ChatterboxService(ILogger<ChatterboxService> logger, IWebHostEnvironment environment)
         {
             _logger = logger;
+            _environment = environment;
             var options = new BoundedChannelOptions(100)
             {
                 FullMode = BoundedChannelFullMode.Wait,
@@ -57,8 +60,11 @@ namespace SharpAI
             {
                 await InitializePythonAndModels();
                 
-                // Warm up the model with a test request
-                await WarmUpModel();
+                // Warm up the model with a test request if we are in production
+                if (_environment.IsProduction())
+                {
+                    await WarmUpModel();
+                }
                 
                 _logger.LogInformation("ChatterboxService started, processing TTS requests...");
                 

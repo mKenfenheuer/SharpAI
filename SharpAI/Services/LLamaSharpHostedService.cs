@@ -7,6 +7,7 @@ using System.Text;
 using System.Threading.Channels;
 using System.Collections.Concurrent;
 using Microsoft.Extensions.Hosting;
+using Microsoft.AspNetCore.Hosting;
 
 namespace SharpAI.Services
 {
@@ -21,6 +22,7 @@ namespace SharpAI.Services
         private readonly ILogger<LLamaSharpHostedService> _logger;
         private readonly IServiceProvider _serviceProvider;
         private readonly RequestLogger _requestLogger;
+        private readonly IWebHostEnvironment _environment;
         private readonly Channel<LLamaSharpInternalRequest> _requestChannel;
         private readonly ChannelWriter<LLamaSharpInternalRequest> _requestWriter;
         private readonly ChannelReader<LLamaSharpInternalRequest> _requestReader;
@@ -33,16 +35,19 @@ namespace SharpAI.Services
         /// <param name="logger">Logger for service operations</param>
         /// <param name="serviceProvider">Service provider for retrieving scoped services</param>
         /// <param name="requestLogger">Request logger for JSONL logging</param>
+        /// <param name="environment">Web host environment to determine if running in production</param>
         public LLamaSharpHostedService(
             LLamaModelManager modelManager, 
             ILogger<LLamaSharpHostedService> logger,
             IServiceProvider serviceProvider,
-            RequestLogger requestLogger)
+            RequestLogger requestLogger,
+            IWebHostEnvironment environment)
         {
             _modelManager = modelManager;
             _logger = logger;
             _serviceProvider = serviceProvider;
             _requestLogger = requestLogger;
+            _environment = environment;
             
             var options = new BoundedChannelOptions(50)
             {
@@ -61,8 +66,11 @@ namespace SharpAI.Services
         {
             try
             {
-                // Warm up the model with a test request
-                await WarmUpModel();
+                // Warm up the model with a test request if we are in production
+                if (_environment.IsProduction())
+                {
+                    await WarmUpModel();
+                }
                 
                 _logger.LogInformation("LLamaSharpHostedService started, processing chat completion requests...");
                 

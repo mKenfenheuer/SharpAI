@@ -9,6 +9,7 @@ using Whisper.net.Logger;
 using System.Threading.Channels;
 using System.Collections.Concurrent;
 using Microsoft.Extensions.Hosting;
+using Microsoft.AspNetCore.Hosting;
 
 namespace SharpAI.Services
 {
@@ -21,6 +22,7 @@ namespace SharpAI.Services
     {
         private readonly WhisperModelManager _modelManager;
         private readonly ILogger<WhisperHostedService> _logger;
+        private readonly IWebHostEnvironment _environment;
         private readonly Channel<WhisperInternalRequest> _requestChannel;
         private readonly ChannelWriter<WhisperInternalRequest> _requestWriter;
         private readonly ChannelReader<WhisperInternalRequest> _requestReader;
@@ -31,10 +33,12 @@ namespace SharpAI.Services
         /// </summary>
         /// <param name="modelManager">Whisper model manager for loading models</param>
         /// <param name="logger">Logger for service operations</param>
-        public WhisperHostedService(WhisperModelManager modelManager, ILogger<WhisperHostedService> logger)
+        /// <param name="environment">Web host environment to determine if running in production</param>
+        public WhisperHostedService(WhisperModelManager modelManager, ILogger<WhisperHostedService> logger, IWebHostEnvironment environment)
         {
             _modelManager = modelManager;
             _logger = logger;
+            _environment = environment;
             
             var options = new BoundedChannelOptions(50)
             {
@@ -53,9 +57,12 @@ namespace SharpAI.Services
         {
             try
             {
-                // Warm up the model with a test request
-                await WarmUpModel();
-                
+                // Warm up the model with a test request if we are in production
+                if (_environment.IsProduction())
+                {
+                    await WarmUpModel();
+                }
+
                 _logger.LogInformation("WhisperHostedService started, processing transcription requests...");
                 
                 await foreach (var request in _requestReader.ReadAllAsync(stoppingToken))

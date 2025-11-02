@@ -536,9 +536,7 @@ public class HarmonyParser : IDisposable
     /// </summary>
     public void Dispose()
     {
-        _messages.Clear();
-        _messages = null;
-        _currentMessage = null;
+        ResetParserState();
     }
 
     public HarmonyResponse GetPartialResponse()

@@ -45,6 +45,8 @@ public class StreamingInferenceEngine
         _logger.LogInformation("[{RequestId}] Starting streaming inference for model: {Model} with {MessageCount} messages",
             requestId, request.Model, messages.Count);
 
+        _parser.ResetParserState();
+
         var conversation = _formatter.ConvertToHarmonyConversation(
             messages,
             request.ReasoningEffort ?? ReasoningEffortLevel.Low,
