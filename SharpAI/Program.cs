@@ -43,9 +43,14 @@ public class Program
         builder.Services.AddScoped<SharpAI.Services.Harmony.StreamingInferenceEngine>();
         builder.Services.AddScoped<SharpAI.Services.Harmony.HarmonyParser>();
     
-        // Register llama and whisper services
-        builder.Services.AddSingleton<SharpAI.Services.LLamaSharpService>();
-        builder.Services.AddSingleton<SharpAI.Services.WhisperService>();
+        // Register llama and whisper hosted services
+        builder.Services.AddSingleton<SharpAI.Services.WhisperHostedService>();
+        builder.Services.AddHostedService<SharpAI.Services.WhisperHostedService>(provider => 
+            provider.GetRequiredService<SharpAI.Services.WhisperHostedService>());
+            
+        builder.Services.AddSingleton<SharpAI.Services.LLamaSharpHostedService>();
+        builder.Services.AddHostedService<SharpAI.Services.LLamaSharpHostedService>(provider => 
+            provider.GetRequiredService<SharpAI.Services.LLamaSharpHostedService>());
         
         // Register TTS service as hosted service
         builder.Services.AddSingleton<SharpAI.ChatterboxService>();

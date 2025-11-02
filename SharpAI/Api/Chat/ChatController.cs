@@ -28,17 +28,17 @@ namespace SharpAI.Api.Chat
     [Route("v1/chat")]
     public class ChatController : ControllerBase
     {
-        private readonly LLamaSharpService _llamaService;
+        private readonly LLamaSharpHostedService _llamaService;
         private readonly ILogger<ChatController> _logger;
         private readonly RequestLogger _requestLogger;
 
         /// <summary>
         /// Initializes a new instance of the ChatController.
         /// </summary>
-        /// <param name="llamaService">LLamaSharp service for chat completions</param>
+        /// <param name="llamaService">LLamaSharp hosted service for chat completions</param>
         /// <param name="logger">Logger for controller operations</param>
         /// <param name="requestLogger">Request logger for JSONL logging</param>
-        public ChatController(LLamaSharpService llamaService, ILogger<ChatController> logger, RequestLogger requestLogger)
+        public ChatController(LLamaSharpHostedService llamaService, ILogger<ChatController> logger, RequestLogger requestLogger)
         {
             _llamaService = llamaService;
             _logger = logger;

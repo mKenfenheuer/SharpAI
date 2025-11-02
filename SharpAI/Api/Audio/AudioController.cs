@@ -10,11 +10,11 @@ namespace SharpAI.Api.Audio;
 [Route("v1/audio")]
 public class AudioController : ControllerBase
 {
-    private readonly WhisperService _whisperService;
+    private readonly WhisperHostedService _whisperService;
     private readonly ChatterboxService _chatterboxService;
     private readonly ILogger<AudioController> _logger;
 
-    public AudioController(WhisperService whisperService, ChatterboxService chatterboxService, ILogger<AudioController> logger)
+    public AudioController(WhisperHostedService whisperService, ChatterboxService chatterboxService, ILogger<AudioController> logger)
     {
         _whisperService = whisperService;
         _chatterboxService = chatterboxService;
