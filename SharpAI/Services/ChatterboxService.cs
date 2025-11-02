@@ -57,6 +57,9 @@ namespace SharpAI
             {
                 await InitializePythonAndModels();
                 
+                // Warm up the model with a test request
+                await WarmUpModel();
+                
                 _logger.LogInformation("ChatterboxService started, processing TTS requests...");
                 
                 await foreach (var request in _requestReader.ReadAllAsync(stoppingToken))
@@ -156,6 +159,43 @@ namespace SharpAI
                     throw;
                 }
             });
+        }
+
+        private async Task WarmUpModel()
+        {
+            try
+            {
+                _logger.LogInformation("Warming up ChatterboxService TTS model...");
+                
+                // Wait a bit to ensure Python initialization is complete
+                await Task.Delay(100);
+                
+                if (!_initialized)
+                {
+                    _logger.LogWarning("ChatterboxService not initialized yet, skipping warmup");
+                    return;
+                }
+                
+                var warmupRequest = new TtsInternalRequest
+                {
+                    RequestId = "warmup",
+                    Text = "Hello, this is a warmup test.",
+                    LanguageId = "en",
+                    EmotionIntensity = 0.5f,
+                    CfgWeight = 0.5f,
+                    Exaggeration = 0.5f,
+                    ResponseFormat = "wav"
+                };
+
+                var warmupResult = ProcessTtsRequest(warmupRequest);
+                warmupResult?.Dispose(); // Clean up the test audio
+
+                _logger.LogInformation("ChatterboxService TTS model warmed up successfully");
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to warm up ChatterboxService TTS model, but continuing anyway");
+            }
         }
 
         private MemoryStream ProcessTtsRequest(TtsInternalRequest request)

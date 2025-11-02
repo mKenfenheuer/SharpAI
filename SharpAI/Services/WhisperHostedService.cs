@@ -53,6 +53,9 @@ namespace SharpAI.Services
         {
             try
             {
+                // Warm up the model with a test request
+                await WarmUpModel();
+                
                 _logger.LogInformation("WhisperHostedService started, processing transcription requests...");
                 
                 await foreach (var request in _requestReader.ReadAllAsync(stoppingToken))
@@ -85,6 +88,78 @@ namespace SharpAI.Services
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Fatal error in WhisperHostedService");
+            }
+        }
+
+        private async Task WarmUpModel()
+        {
+            try
+            {
+                _logger.LogInformation("Warming up WhisperHostedService model...");
+                
+                // Create a minimal WAV file for testing (1 second of silence at 16kHz)
+                var sampleRate = 16000;
+                var duration = 1.0; // 1 second
+                var samples = (int)(sampleRate * duration);
+                var audioData = new byte[44 + samples * 2]; // WAV header + 16-bit samples
+
+                // Write WAV header
+                var header = new byte[]
+                {
+                    0x52, 0x49, 0x46, 0x46, // "RIFF"
+                    0x00, 0x00, 0x00, 0x00, // File size (will be filled later)
+                    0x57, 0x41, 0x56, 0x45, // "WAVE"
+                    0x66, 0x6D, 0x74, 0x20, // "fmt "
+                    0x10, 0x00, 0x00, 0x00, // Format chunk size
+                    0x01, 0x00,             // Audio format (PCM)
+                    0x01, 0x00,             // Channels (1)
+                    0x80, 0x3E, 0x00, 0x00, // Sample rate (16000)
+                    0x00, 0x7D, 0x00, 0x00, // Byte rate (16000 * 1 * 2)
+                    0x02, 0x00,             // Block align (1 * 2)
+                    0x10, 0x00,             // Bits per sample (16)
+                    0x64, 0x61, 0x74, 0x61, // "data"
+                    0x00, 0x00, 0x00, 0x00  // Data size (will be filled later)
+                };
+
+                Array.Copy(header, audioData, header.Length);
+                
+                // Fill file size and data size
+                var fileSize = audioData.Length - 8;
+                var dataSize = samples * 2;
+                BitConverter.GetBytes(fileSize).CopyTo(audioData, 4);
+                BitConverter.GetBytes(dataSize).CopyTo(audioData, 40);
+
+                using var audioStream = new MemoryStream(audioData);
+                
+                var warmupRequest = new AudioTranscriptionRequest
+                {
+                    Model = "whisper-1",
+                    Language = "en",
+                    ResponseFormat = AudioResponseFormat.Text
+                };
+
+                var warmupInternalRequest = new WhisperInternalRequest
+                {
+                    RequestId = "warmup",
+                    AudioStream = audioStream,
+                    TranscriptionRequest = warmupRequest,
+                    IsStreaming = false
+                };
+
+                var warmupResult = await ProcessTranscriptionRequestAsync(warmupInternalRequest);
+                
+                if (warmupResult.Error != null)
+                {
+                    _logger.LogWarning("Warmup transcription had error: {Error}", warmupResult.Error.Message);
+                }
+                else
+                {
+                    _logger.LogInformation("WhisperHostedService model warmed up successfully");
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to warm up WhisperHostedService model, but continuing anyway");
             }
         }
 

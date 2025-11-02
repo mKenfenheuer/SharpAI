@@ -61,6 +61,9 @@ namespace SharpAI.Services
         {
             try
             {
+                // Warm up the model with a test request
+                await WarmUpModel();
+                
                 _logger.LogInformation("LLamaSharpHostedService started, processing chat completion requests...");
                 
                 await foreach (var request in _requestReader.ReadAllAsync(stoppingToken))
@@ -88,6 +91,96 @@ namespace SharpAI.Services
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Fatal error in LLamaSharpHostedService");
+            }
+        }
+
+        private async Task WarmUpModel()
+        {
+            try
+            {
+                _logger.LogInformation("Warming up LLamaSharpHostedService model...");
+                
+                var warmupRequest = new ChatCompletionRequest
+                {
+                    Model = "gpt-4",
+                    Messages = new List<ChatMessage>
+                    {
+                        new ChatMessage { Role = ChatRole.System, Content = "You are a helpful assistant." },
+                        new ChatMessage { Role = ChatRole.User, Content = "Say 'Hello' as a warmup test." }
+                    },
+                    MaxTokens = 5,
+                    Temperature = 0.1,
+                    Stream = false // Disable streaming for warmup to avoid parsing issues
+                };
+
+                var warmupInternalRequest = new LLamaSharpInternalRequest
+                {
+                    RequestId = "warmup",
+                    CompletionRequest = warmupRequest,
+                    CancellationToken = CancellationToken.None
+                };
+
+                var warmupResult = await ProcessChatCompletionRequestAsync(warmupInternalRequest);
+                
+                if (warmupResult.Error != null)
+                {
+                    _logger.LogWarning("Warmup chat completion had error: {Error}", warmupResult.Error.Message);
+                }
+                else if (warmupResult.StreamingResponse != null)
+                {
+                    // Just try to get the first response to trigger model loading
+                    try
+                    {
+                        var enumerator = warmupResult.StreamingResponse.GetAsyncEnumerator();
+                        var responseReceived = false;
+                        var maxAttempts = 3;
+                        var attempt = 0;
+                        
+                        while (attempt < maxAttempts && !responseReceived)
+                        {
+                            try
+                            {
+                                if (await enumerator.MoveNextAsync())
+                                {
+                                    responseReceived = true;
+                                    _logger.LogInformation("LLamaSharpHostedService model warmed up successfully");
+                                }
+                                break;
+                            }
+                            catch (Exception ex)
+                            {
+                                attempt++;
+                                _logger.LogDebug("Warmup attempt {Attempt} failed: {Error}", attempt, ex.Message);
+                                if (attempt >= maxAttempts)
+                                {
+                                    throw;
+                                }
+                                await Task.Delay(100); // Brief delay before retry
+                            }
+                        }
+                        
+                        await enumerator.DisposeAsync();
+                        
+                        if (!responseReceived)
+                        {
+                            _logger.LogWarning("LLamaSharpHostedService warmup completed but no response received");
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogWarning("Error during warmup response processing: {Error}", ex.Message);
+                        // Still consider it successful if we got this far (model loaded)
+                        _logger.LogInformation("LLamaSharpHostedService model loaded (warmup response failed but model is ready)");
+                    }
+                }
+                else
+                {
+                    _logger.LogWarning("LLamaSharpHostedService warmup returned no response");
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to warm up LLamaSharpHostedService model, but continuing anyway");
             }
         }
 
