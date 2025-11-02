@@ -23,7 +23,7 @@ RUN pip install torch torchaudio --index-url https://download.pytorch.org/whl/cu
 
 # Upgrade pip and install dependencies
 WORKDIR /opt/
-RUN git clone --branch faster-multi https://github.com/mkenfenheuer/chatterbox.git || true
+RUN git clone --branch faster-multi https://github.com/mkenfenheuer/chatterbox.git
 WORKDIR /opt/chatterbox
 RUN pip install -e .
 RUN pip install langdetect
