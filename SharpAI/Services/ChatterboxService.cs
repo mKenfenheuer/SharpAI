@@ -112,20 +112,8 @@ namespace SharpAI
 
                     using (Py.GIL())
                     {
-                        // Capture Python output for logging
-                        dynamic sys = Py.Import("sys");
-                        dynamic io = Py.Import("io");
-                        dynamic stdout_capture = io.StringIO();
-                        dynamic stderr_capture = io.StringIO();
-                        dynamic original_stdout = sys.stdout;
-                        dynamic original_stderr = sys.stderr;
-                        
                         try
                         {
-                            // Redirect stdout and stderr to capture output
-                            //sys.stdout = stdout_capture;
-                            //sys.stderr = stderr_capture;
-                            
                             // Load multilingual TTS model
                             dynamic mtl = Py.Import("chatterbox.mtl_tts");
                             _model = mtl.ChatterboxMultilingualTTS.from_pretrained(device: "cuda");
@@ -135,25 +123,10 @@ namespace SharpAI
                             _langdetect = Py.Import("langdetect");
                             _logger.LogInformation("Language detection module initialized");
                         }
-                        finally
+                        catch (PythonException ex)
                         {
-                            // Restore original stdout and stderr
-                            sys.stdout = original_stdout;
-                            sys.stderr = original_stderr;
-                            
-                            // Log captured output
-                            string capturedStdout = stdout_capture.getvalue().ToString();
-                            string capturedStderr = stderr_capture.getvalue().ToString();
-                            
-                            if (!string.IsNullOrWhiteSpace(capturedStdout))
-                            {
-                                _logger.LogDebug("Python stdout during initialization: {Output}", capturedStdout.Trim());
-                            }
-                            
-                            if (!string.IsNullOrWhiteSpace(capturedStderr))
-                            {
-                                _logger.LogDebug("Python stderr during initialization: {Output}", capturedStderr.Trim());
-                            }
+                            _logger.LogError("Python error during initialization: {Error}", ex.Message);
+                            throw;
                         }
                     }
 
@@ -276,22 +249,10 @@ namespace SharpAI
                         actualCfgWeight = Math.Max(actualCfgWeight, 0.5f);
                         _logger.LogDebug("Low exaggeration detected ({Exaggeration}), using cfg_weight {CfgWeight} for controlled speech", actualExaggeration, actualCfgWeight);
                     }
-
-                    // Capture Python output during TTS generation
-                    dynamic sys = Py.Import("sys");
-                    dynamic io = Py.Import("io");
-                    dynamic stdout_capture = io.StringIO();
-                    dynamic stderr_capture = io.StringIO();
-                    dynamic original_stdout = sys.stdout;
-                    dynamic original_stderr = sys.stderr;
                     
                     string tempPath;
                     try
                     {
-                        // Redirect stdout and stderr to capture output
-                        //sys.stdout = stdout_capture;
-                        //sys.stderr = stderr_capture;
-
                         // Optional voice cloning
                         if (!string.IsNullOrEmpty(request.ReferenceAudioPath))
                         {
@@ -324,25 +285,10 @@ namespace SharpAI
                         tempPath = Path.ChangeExtension(tempPath, "." + request.ResponseFormat);
                         torchaudio.save(tempPath, wav, _model.sr);
                     }
-                    finally
+                    catch (PythonException ex)
                     {
-                        // Restore original stdout and stderr
-                        sys.stdout = original_stdout;
-                        sys.stderr = original_stderr;
-                        
-                        // Log captured output
-                        string capturedStdout = stdout_capture.getvalue().ToString();
-                        string capturedStderr = stderr_capture.getvalue().ToString();
-                        
-                        if (!string.IsNullOrWhiteSpace(capturedStdout))
-                        {
-                            _logger.LogDebug("Python stdout during TTS generation: {Output}", capturedStdout.Trim());
-                        }
-                        
-                        if (!string.IsNullOrWhiteSpace(capturedStderr))
-                        {
-                            _logger.LogDebug("Python stderr during TTS generation: {Output}", capturedStderr.Trim());
-                        }
+                        _logger.LogError("Python error during TTS generation: {Error}", ex.Message);
+                        throw;
                     }
 
                     var bytes = File.ReadAllBytes(tempPath);
