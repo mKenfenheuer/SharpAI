@@ -1,6 +1,8 @@
-using Python.Runtime;
 using System;
 using System.IO;
+using System.Net.Http;
+using System.Text;
+using System.Text.Json;
 using System.Threading.Tasks;
 using System.Threading.Channels;
 using Microsoft.Extensions.Hosting;
@@ -8,12 +10,32 @@ using Microsoft.Extensions.Logging;
 using System.Collections.Concurrent;
 using SharpAI.Models;
 using Microsoft.AspNetCore.Hosting;
+using SharpAI.Services;
+using System.Net.Http.Headers;
+using System.Linq;
 
 namespace SharpAI
 {
+    // DTOs for TTS API communication
+    public class TtsApiRequest
+    {
+        public string Text { get; set; } = string.Empty;
+        public string? LanguageId { get; set; }
+        public float CfgWeight { get; set; } = 0.5f;
+        public float Exaggeration { get; set; } = 0.5f;
+        public string OutputFormat { get; set; } = "wav";
+    }
+
+    public class TtsApiResponse
+    {
+        public bool Success { get; set; }
+        public string Message { get; set; } = string.Empty;
+        public string? LanguageDetected { get; set; }
+    }
     public class ChatterboxService : BackgroundService
     {
-        private dynamic _model;
+        private readonly HttpClient _httpClient;
+        private readonly PythonApiHostedService _pythonApiService;
         private bool _initialized = false;
         private readonly Channel<TtsInternalRequest> _requestChannel;
         private readonly ChannelWriter<TtsInternalRequest> _requestWriter;
@@ -22,31 +44,28 @@ namespace SharpAI
         private readonly ILogger<ChatterboxService> _logger;
         private readonly IWebHostEnvironment _environment;
 
-        // Supported languages by ChatterboxMultilingualTTS
-        private static readonly HashSet<string> SupportedLanguages = new HashSet<string>
-        {
-            "ar", "da", "de", "el", "en", "es", "fi", "fr", "he", "hi",
-            "it", "ja", "ko", "ms", "nl", "no", "pl", "pt", "ru", "sv",
-            "sw", "tr", "zh"
-        };
-
         // Supported audio response formats
         private static readonly HashSet<string> SupportedResponseFormats = new HashSet<string>
         {
             "mp3", "wav"
         };
 
-        public ChatterboxService(ILogger<ChatterboxService> logger, IWebHostEnvironment environment)
+        public ChatterboxService(
+            ILogger<ChatterboxService> logger, 
+            IWebHostEnvironment environment,
+            PythonApiHostedService pythonApiService,
+            HttpClient httpClient)
         {
             _logger = logger;
             _environment = environment;
-            var options = new BoundedChannelOptions(100)
+            _httpClient = httpClient;
+            _pythonApiService = pythonApiService;            var options = new BoundedChannelOptions(100)
             {
                 FullMode = BoundedChannelFullMode.Wait,
                 SingleReader = true,
                 SingleWriter = false
             };
-            
+
             _requestChannel = Channel.CreateBounded<TtsInternalRequest>(options);
             _requestWriter = _requestChannel.Writer;
             _requestReader = _requestChannel.Reader;
@@ -57,22 +76,22 @@ namespace SharpAI
         {
             try
             {
-                await InitializePythonAndModels();
-                
+                await WaitForPythonApiAsync(stoppingToken);
+
                 // Warm up the model with a test request if we are in production
                 if (_environment.IsProduction())
                 {
                     await WarmUpModel();
                 }
-                
+
                 _logger.LogInformation("ChatterboxService started, processing TTS requests...");
-                
+
                 await foreach (var request in _requestReader.ReadAllAsync(stoppingToken))
                 {
                     try
                     {
-                        var result = ProcessTtsRequest(request);
-                        
+                        var result = await ProcessTtsRequestAsync(request);
+
                         if (_pendingRequests.TryRemove(request.RequestId, out var tcs))
                         {
                             tcs.SetResult(result);
@@ -81,7 +100,7 @@ namespace SharpAI
                     catch (Exception ex)
                     {
                         _logger.LogError(ex, "Error processing TTS request {RequestId}", request.RequestId);
-                        
+
                         if (_pendingRequests.TryRemove(request.RequestId, out var tcs))
                         {
                             tcs.SetException(ex);
@@ -95,59 +114,31 @@ namespace SharpAI
             }
         }
 
-        private async Task InitializePythonAndModels()
+        private async Task WaitForPythonApiAsync(CancellationToken stoppingToken)
         {
-            await Task.Run(() =>
+            _logger.LogInformation("Waiting for Python API to become available...");
+
+            var timeout = TimeSpan.FromMinutes(2);
+            var startTime = DateTime.UtcNow;
+
+            while (DateTime.UtcNow - startTime < timeout && !stoppingToken.IsCancellationRequested)
             {
-                try
+                if (_pythonApiService.IsHealthy)
                 {
-                    if (!PythonEngine.IsInitialized)
-                    {
-                        // Set Python.NET to use automatic thread state management
-                        PythonEngine.Initialize();
-                        PythonEngine.BeginAllowThreads();
-                        _logger.LogInformation("Python engine initialized with thread support");
-                    }
-
-                    using (Py.GIL())
-                    {
-                        try
-                        {
-                            // Add the python runtime path to sys.path
-                            dynamic sys = Py.Import("sys");
-                            string pythonPath = Path.Combine(Directory.GetCurrentDirectory(), "runtimes", "python");
-                            sys.path.append(pythonPath);
-                            
-                            // Import our chatterbox module
-                            dynamic chatterbox = Py.Import("chatterbox_tts_service");
-                            
-                            // Initialize the Chatterbox TTS service
-                            bool success = chatterbox.initialize_chatterbox("cuda");
-                            if (!success)
-                            {
-                                throw new Exception("Failed to initialize Chatterbox TTS in Python");
-                            }
-                            
-                            _logger.LogInformation("Chatterbox Multilingual TTS loaded successfully via Python module");
-                            
-                            // Store reference to the module for later use
-                            _model = chatterbox;
-                        }
-                        catch (PythonException ex)
-                        {
-                            _logger.LogError("Python error during initialization: {Error}", ex.Message);
-                            throw;
-                        }
-                    }
-
                     _initialized = true;
+                    _logger.LogInformation("Python API is ready");
+                    return;
                 }
-                catch (Exception ex)
-                {
-                    _logger.LogError(ex, "Failed to initialize Python engine and models");
-                    throw;
-                }
-            });
+
+                await Task.Delay(1000, stoppingToken);
+            }
+
+            if (stoppingToken.IsCancellationRequested)
+            {
+                throw new OperationCanceledException("Startup cancelled");
+            }
+
+            throw new TimeoutException("Python API failed to become available within timeout period");
         }
 
         private async Task WarmUpModel()
@@ -155,21 +146,22 @@ namespace SharpAI
             try
             {
                 _logger.LogInformation("Warming up ChatterboxService TTS model...");
-                
-                // Wait a bit to ensure Python initialization is complete
-                await Task.Delay(100);
-                
+
                 if (!_initialized)
                 {
                     _logger.LogWarning("ChatterboxService not initialized yet, skipping warmup");
                     return;
                 }
-                
-                using (Py.GIL())
+
+                var warmupUrl = $"{_pythonApiService.ApiBaseUrl}/warmup";
+                var response = await _httpClient.PostAsync(warmupUrl, null);
+
+                if (response.IsSuccessStatusCode)
                 {
-                    // Call the warmup function from our Python module
-                    bool success = _model.warmup_chatterbox();
-                    if (success)
+                    var content = await response.Content.ReadAsStringAsync();
+                    var result = JsonSerializer.Deserialize<JsonElement>(content);
+
+                    if (result.TryGetProperty("success", out var success) && success.GetBoolean())
                     {
                         _logger.LogInformation("ChatterboxService TTS model warmed up successfully");
                     }
@@ -178,6 +170,10 @@ namespace SharpAI
                         _logger.LogWarning("Warmup returned false, but continuing anyway");
                     }
                 }
+                else
+                {
+                    _logger.LogWarning($"Warmup failed with status: {response.StatusCode}");
+                }
             }
             catch (Exception ex)
             {
@@ -185,110 +181,107 @@ namespace SharpAI
             }
         }
 
-        private MemoryStream ProcessTtsRequest(TtsInternalRequest request)
+        private async Task<MemoryStream> ProcessTtsRequestAsync(TtsInternalRequest request)
         {
             if (!_initialized)
             {
                 throw new InvalidOperationException("ChatterboxService not initialized");
             }
 
-            _logger.LogDebug("Processing TTS request for text: {Text}...", 
+            _logger.LogDebug("Processing TTS request for text: {Text}...",
                 request.Text.Length > 50 ? request.Text[..50] + "..." : request.Text);
 
             try
             {
-                using (Py.GIL())
+                // Validate response format
+                if (string.IsNullOrEmpty(request.ResponseFormat) ||
+                    !SupportedResponseFormats.Contains(request.ResponseFormat.ToLower()))
                 {
-                    // Auto detect language if not specified
-                    string languageId = request.LanguageId;
-                    if (string.IsNullOrEmpty(languageId))
-                    {
-                        try
-                        {
-                            languageId = _model.detect_language(request.Text).ToString();
-                            _logger.LogDebug("Auto-detected language: {Language}", languageId);
-                        }
-                        catch (PythonException ex)
-                        {
-                            _logger.LogWarning("Language detection failed: {Error}, defaulting to English", ex.Message);
-                            languageId = "en";
-                        }
-                    }
-
-                    // Validate and adjust language if needed
-                    if (!SupportedLanguages.Contains(languageId))
-                    {
-                        _logger.LogWarning("Language '{Language}' not supported, defaulting to English", languageId);
-                        languageId = "en";
-                    }
-
-                    // Validate response format
-                    if (string.IsNullOrEmpty(request.ResponseFormat) ||
-                        !SupportedResponseFormats.Contains(request.ResponseFormat.ToLower()))
-                    {
-                        _logger.LogWarning("Response format '{Format}' not supported, defaulting to 'wav'", request.ResponseFormat);
-                        request.ResponseFormat = "wav";
-                    }
-
-                    // Use exaggeration as emotion intensity (ChatterboxMultilingualTTS parameter)
-                    float actualExaggeration = request.Exaggeration;
-                    float actualCfgWeight = request.CfgWeight;
-                    
-                    // If emotion_intensity is provided and differs from default, use it as exaggeration
-                    if (request.EmotionIntensity != 0.5f)
-                    {
-                        actualExaggeration = request.EmotionIntensity;
-                        _logger.LogDebug("Using emotion_intensity ({EmotionIntensity}) as exaggeration parameter", request.EmotionIntensity);
-                    }
-
-                    // Auto-adjust cfg_weight based on exaggeration level for optimal results
-                    if (actualExaggeration > 0.6f)
-                    {
-                        actualCfgWeight = Math.Min(actualCfgWeight, 0.3f);
-                        _logger.LogDebug("High exaggeration detected ({Exaggeration}), adjusting cfg_weight to {CfgWeight}", actualExaggeration, actualCfgWeight);
-                    }
-                    else if (actualExaggeration < 0.4f)
-                    {
-                        actualCfgWeight = Math.Max(actualCfgWeight, 0.5f);
-                        _logger.LogDebug("Low exaggeration detected ({Exaggeration}), using cfg_weight {CfgWeight}", actualExaggeration, actualCfgWeight);
-                    }
-                    
-                    // Call the Python generate_speech function
-                    dynamic result = _model.generate_speech(
-                        request.Text,
-                        language_id: languageId,
-                        cfg_weight: actualCfgWeight*0.9f, // Slightly reduce cfg_weight for Chatterbox
-                        exaggeration: actualExaggeration,
-                        reference_audio_path: request.ReferenceAudioPath,
-                        output_format: request.ResponseFormat
-                    );
-                    
-                    // Extract success and file path from Python tuple result
-                    bool success = (bool)result[0];
-                    string tempPath = result[1].ToString();
-                    
-                    if (!success)
-                    {
-                        throw new Exception($"Python TTS generation failed: {tempPath}");
-                    }
-
-                    if (!File.Exists(tempPath))
-                    {
-                        throw new FileNotFoundException($"Generated audio file not found: {tempPath}");
-                    }
-
-                    var bytes = File.ReadAllBytes(tempPath);
-                    File.Delete(tempPath); // Clean up temp file
-                    var stream = new MemoryStream(bytes);
-                    stream.Position = 0;
-
-                    _logger.LogDebug("TTS synthesis completed successfully. Generated {Bytes} bytes", bytes.Length);
-                    return stream;
+                    _logger.LogWarning("Response format '{Format}' not supported, defaulting to 'wav'", request.ResponseFormat);
+                    request.ResponseFormat = "wav";
                 }
+
+                // Use exaggeration as emotion intensity (ChatterboxMultilingualTTS parameter)
+                float actualExaggeration = request.Exaggeration;
+                float actualCfgWeight = request.CfgWeight;
+
+                // If emotion_intensity is provided and differs from default, use it as exaggeration
+                if (request.EmotionIntensity != 0.5f)
+                {
+                    actualExaggeration = request.EmotionIntensity;
+                    _logger.LogDebug("Using emotion_intensity ({EmotionIntensity}) as exaggeration parameter", request.EmotionIntensity);
+                }
+
+                // Auto-adjust cfg_weight based on exaggeration level for optimal results
+                if (actualExaggeration > 0.6f)
+                {
+                    actualCfgWeight = Math.Min(actualCfgWeight, 0.3f);
+                    _logger.LogDebug("High exaggeration detected ({Exaggeration}), adjusting cfg_weight to {CfgWeight}", actualExaggeration, actualCfgWeight);
+                }
+                else if (actualExaggeration < 0.4f)
+                {
+                    actualCfgWeight = Math.Max(actualCfgWeight, 0.5f);
+                    _logger.LogDebug("Low exaggeration detected ({Exaggeration}), using cfg_weight {CfgWeight}", actualExaggeration, actualCfgWeight);
+                }
+
+                // Call the Python API (language detection is now handled by Python API)
+                var audioBytes = await CallTtsApiAsync(new TtsApiRequest
+                {
+                    Text = request.Text,
+                    LanguageId = request.LanguageId, // Can be null - Python API will auto-detect
+                    CfgWeight = actualCfgWeight * 0.9f, // Slightly reduce cfg_weight for Chatterbox
+                    Exaggeration = actualExaggeration,
+                    OutputFormat = request.ResponseFormat
+                });
+
+                var stream = new MemoryStream(audioBytes);
+                stream.Position = 0;
+
+                _logger.LogDebug("TTS synthesis completed successfully. Generated {Bytes} bytes", audioBytes.Length);
+                return stream;
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Error in ProcessTtsRequest: {Message}", ex.Message);
+                _logger.LogError(ex, "Error in ProcessTtsRequestAsync: {Message}", ex.Message);
+                throw;
+            }
+        }
+
+        private async Task<byte[]> CallTtsApiAsync(TtsApiRequest request)
+        {
+            try
+            {
+                var json = JsonSerializer.Serialize(request, new JsonSerializerOptions
+                {
+                    PropertyNamingPolicy = JsonNamingPolicy.CamelCase
+                });
+
+                var content = new StringContent(json, Encoding.UTF8, new MediaTypeHeaderValue("application/json"));
+                var response = await _httpClient.PostAsync($"{_pythonApiService.ApiBaseUrl}/synthesize", content);
+
+                if (!response.IsSuccessStatusCode)
+                {
+                    var errorContent = await response.Content.ReadAsStringAsync();
+                    throw new HttpRequestException($"TTS API call failed: {response.StatusCode} - {errorContent}");
+                }
+
+                // Log detected language if available in response headers
+                if (response.Headers.TryGetValues("X-Detected-Language", out var detectedLanguageValues))
+                {
+                    var detectedLanguage = detectedLanguageValues.FirstOrDefault();
+                    if (!string.IsNullOrEmpty(detectedLanguage))
+                    {
+                        _logger.LogDebug("Python API detected language: {Language}", detectedLanguage);
+                    }
+                }
+
+                // The API now returns audio bytes directly
+                var audioBytes = await response.Content.ReadAsByteArrayAsync();
+                return audioBytes;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error calling TTS API");
                 throw;
             }
         }
@@ -320,7 +313,7 @@ namespace SharpAI
         {
             var requestId = Guid.NewGuid().ToString();
             var tcs = new TaskCompletionSource<MemoryStream>();
-            
+
             var request = new TtsInternalRequest
             {
                 RequestId = requestId,
@@ -352,28 +345,15 @@ namespace SharpAI
             try
             {
                 _requestWriter.Complete();
-                
-                if (_initialized)
-                {
-                    _logger.LogInformation("Shutting down Python engine...");
-                    try
-                    {
-                        // Shutdown Python engine
-                        PythonEngine.Shutdown();
-                        _logger.LogInformation("Python engine shut down successfully");
-                    }
-                    catch (Exception ex)
-                    {
-                        _logger.LogWarning(ex, "Error shutting down Python engine: {Message}", ex.Message);
-                    }
-                }
+                _logger.LogInformation("ChatterboxService disposed successfully");
             }
             catch (Exception ex)
             {
                 _logger.LogWarning(ex, "Error during disposal");
             }
-            
+
             base.Dispose();
         }
     }
 }
+

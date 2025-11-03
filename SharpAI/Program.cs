@@ -52,10 +52,17 @@ public class Program
         builder.Services.AddHostedService<SharpAI.Services.LLamaSharpHostedService>(provider => 
             provider.GetRequiredService<SharpAI.Services.LLamaSharpHostedService>());
         
+        // Register Python API hosted service
+        builder.Services.AddHttpClient<global::SharpAI.Services.PythonApiHostedService>();
+        builder.Services.AddSingleton<global::SharpAI.Services.PythonApiHostedService>();
+        builder.Services.AddHostedService<global::SharpAI.Services.PythonApiHostedService>(provider => 
+            provider.GetRequiredService<global::SharpAI.Services.PythonApiHostedService>());
+        
         // Register TTS service as hosted service
-        builder.Services.AddSingleton<SharpAI.ChatterboxService>();
-        builder.Services.AddHostedService<SharpAI.ChatterboxService>(provider => 
-            provider.GetRequiredService<SharpAI.ChatterboxService>());
+        builder.Services.AddHttpClient<global::SharpAI.ChatterboxService>();
+        builder.Services.AddSingleton<global::SharpAI.ChatterboxService>();
+        builder.Services.AddHostedService<global::SharpAI.ChatterboxService>(provider => 
+            provider.GetRequiredService<global::SharpAI.ChatterboxService>());
 
         // Configure form options for large file uploads
         builder.Services.Configure<FormOptions>(options =>

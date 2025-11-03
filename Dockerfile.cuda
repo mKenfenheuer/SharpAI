@@ -24,7 +24,7 @@ FROM base AS final
 WORKDIR /app
 COPY --from=publish /app/publish .
 RUN cp /app/runtimes/cuda/linux-x64/*.so /app/runtimes/linux-x64/
-
+RUN pip install -r runtimes/python/requirements.txt
 # ensure the self-contained native executable is runnable
 RUN if [ -f /app/SharpAI ]; then chmod +x /app/SharpAI; fi
 
