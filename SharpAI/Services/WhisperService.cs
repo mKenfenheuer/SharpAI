@@ -37,7 +37,7 @@ namespace SharpAI.Services
     /// <returns>Full transcription response</returns>
     public async Task<AudioTranscriptionResponse> TranscribeAsync(Stream audioStream, AudioTranscriptionRequest request)
         {
-            var modelName = request.Model ?? "whisper-1"; // Default to whisper-1 (base model)
+            var modelName = request.Model ?? "whisper-medium"; // Default to whisper-medium (medium model)
             _logger.LogInformation("Using Whisper model: {ModelName}", modelName);
             
             WhisperModelInstance modelInstance;

@@ -140,7 +140,7 @@ namespace SharpAI.Services
                 
                 var warmupRequest = new AudioTranscriptionRequest
                 {
-                    Model = "whisper-1",
+                    Model = "whisper-medium",
                     Language = "en",
                     ResponseFormat = AudioResponseFormat.Text
                 };
