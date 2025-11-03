@@ -123,8 +123,8 @@ namespace SharpAI
                         try
                         {
                             // Redirect stdout and stderr to capture output
-                            sys.stdout = stdout_capture;
-                            sys.stderr = stderr_capture;
+                            //sys.stdout = stdout_capture;
+                            //sys.stderr = stderr_capture;
                             
                             // Load multilingual TTS model
                             dynamic mtl = Py.Import("chatterbox.mtl_tts");
@@ -289,8 +289,8 @@ namespace SharpAI
                     try
                     {
                         // Redirect stdout and stderr to capture output
-                        sys.stdout = stdout_capture;
-                        sys.stderr = stderr_capture;
+                        //sys.stdout = stdout_capture;
+                        //sys.stderr = stderr_capture;
 
                         // Optional voice cloning
                         if (!string.IsNullOrEmpty(request.ReferenceAudioPath))
