@@ -14,7 +14,6 @@ namespace SharpAI
     public class ChatterboxService : BackgroundService
     {
         private dynamic _model;
-        private dynamic _langdetect;
         private bool _initialized = false;
         private readonly Channel<TtsInternalRequest> _requestChannel;
         private readonly ChannelWriter<TtsInternalRequest> _requestWriter;
@@ -114,14 +113,25 @@ namespace SharpAI
                     {
                         try
                         {
-                            // Load multilingual TTS model
-                            dynamic mtl = Py.Import("chatterbox.mtl_tts");
-                            _model = mtl.ChatterboxMultilingualTTS.from_pretrained(device: "cuda");
-                            _logger.LogInformation("Chatterbox Multilingual TTS loaded successfully on CUDA");
-
-                            // Load language detection library
-                            _langdetect = Py.Import("langdetect");
-                            _logger.LogInformation("Language detection module initialized");
+                            // Add the python runtime path to sys.path
+                            dynamic sys = Py.Import("sys");
+                            string pythonPath = Path.Combine(Directory.GetCurrentDirectory(), "runtimes", "python");
+                            sys.path.append(pythonPath);
+                            
+                            // Import our chatterbox module
+                            dynamic chatterbox = Py.Import("chatterbox_tts_service");
+                            
+                            // Initialize the Chatterbox TTS service
+                            bool success = chatterbox.initialize_chatterbox("cuda");
+                            if (!success)
+                            {
+                                throw new Exception("Failed to initialize Chatterbox TTS in Python");
+                            }
+                            
+                            _logger.LogInformation("Chatterbox Multilingual TTS loaded successfully via Python module");
+                            
+                            // Store reference to the module for later use
+                            _model = chatterbox;
                         }
                         catch (PythonException ex)
                         {
@@ -155,21 +165,19 @@ namespace SharpAI
                     return;
                 }
                 
-                var warmupRequest = new TtsInternalRequest
+                using (Py.GIL())
                 {
-                    RequestId = "warmup",
-                    Text = "Hello, this is a warmup test.",
-                    LanguageId = "en",
-                    EmotionIntensity = 0.5f,
-                    CfgWeight = 0.5f,
-                    Exaggeration = 0.5f,
-                    ResponseFormat = "wav"
-                };
-
-                var warmupResult = ProcessTtsRequest(warmupRequest);
-                warmupResult?.Dispose(); // Clean up the test audio
-
-                _logger.LogInformation("ChatterboxService TTS model warmed up successfully");
+                    // Call the warmup function from our Python module
+                    bool success = _model.warmup_chatterbox();
+                    if (success)
+                    {
+                        _logger.LogInformation("ChatterboxService TTS model warmed up successfully");
+                    }
+                    else
+                    {
+                        _logger.LogWarning("Warmup returned false, but continuing anyway");
+                    }
+                }
             }
             catch (Exception ex)
             {
@@ -197,7 +205,7 @@ namespace SharpAI
                     {
                         try
                         {
-                            languageId = _langdetect.detect(request.Text).ToString();
+                            languageId = _model.detect_language(request.Text).ToString();
                             _logger.LogDebug("Auto-detected language: {Language}", languageId);
                         }
                         catch (PythonException ex)
@@ -222,8 +230,6 @@ namespace SharpAI
                         request.ResponseFormat = "wav";
                     }
 
-                    dynamic wav;
-
                     // Use exaggeration as emotion intensity (ChatterboxMultilingualTTS parameter)
                     float actualExaggeration = request.Exaggeration;
                     float actualCfgWeight = request.CfgWeight;
@@ -236,59 +242,39 @@ namespace SharpAI
                     }
 
                     // Auto-adjust cfg_weight based on exaggeration level for optimal results
-                    // Higher exaggeration (dramatic speech) -> lower cfg_weight for better pacing
                     if (actualExaggeration > 0.6f)
                     {
-                        // Dramatic/expressive speech: use lower cfg_weight (~0.3)
                         actualCfgWeight = Math.Min(actualCfgWeight, 0.3f);
-                        _logger.LogDebug("High exaggeration detected ({Exaggeration}), adjusting cfg_weight to {CfgWeight} for dramatic speech", actualExaggeration, actualCfgWeight);
+                        _logger.LogDebug("High exaggeration detected ({Exaggeration}), adjusting cfg_weight to {CfgWeight}", actualExaggeration, actualCfgWeight);
                     }
                     else if (actualExaggeration < 0.4f)
                     {
-                        // Low exaggeration: can use higher cfg_weight for more control
                         actualCfgWeight = Math.Max(actualCfgWeight, 0.5f);
-                        _logger.LogDebug("Low exaggeration detected ({Exaggeration}), using cfg_weight {CfgWeight} for controlled speech", actualExaggeration, actualCfgWeight);
+                        _logger.LogDebug("Low exaggeration detected ({Exaggeration}), using cfg_weight {CfgWeight}", actualExaggeration, actualCfgWeight);
                     }
                     
-                    string tempPath;
-                    try
+                    // Call the Python generate_speech function
+                    dynamic result = _model.generate_speech(
+                        request.Text,
+                        language_id: languageId,
+                        cfg_weight: actualCfgWeight*0.9f, // Slightly reduce cfg_weight for Chatterbox
+                        exaggeration: actualExaggeration,
+                        reference_audio_path: request.ReferenceAudioPath,
+                        output_format: request.ResponseFormat
+                    );
+                    
+                    // Extract success and file path from Python tuple result
+                    bool success = (bool)result[0];
+                    string tempPath = result[1].ToString();
+                    
+                    if (!success)
                     {
-                        // Optional voice cloning
-                        if (!string.IsNullOrEmpty(request.ReferenceAudioPath))
-                        {
-                            _logger.LogDebug("Using reference audio for voice cloning: {Path}", request.ReferenceAudioPath);
-                            dynamic librosa = Py.Import("librosa");
-                            dynamic result = librosa.load(request.ReferenceAudioPath, sr: null);
-                            dynamic refWav = result[0];
-
-                            wav = _model.generate(
-                                request.Text,
-                                language_id: languageId,
-                                reference_wav: refWav,
-                                cfg_weight: actualCfgWeight,
-                                exaggeration: actualExaggeration
-                            );
-                        }
-                        else
-                        {
-                            wav = _model.generate(
-                                request.Text,
-                                language_id: languageId,
-                                cfg_weight: actualCfgWeight,
-                                exaggeration: actualExaggeration
-                            );
-                        }
-
-                        // Convert to WAV memory stream
-                        dynamic torchaudio = Py.Import("torchaudio");
-                        tempPath = Path.GetTempFileName();
-                        tempPath = Path.ChangeExtension(tempPath, "." + request.ResponseFormat);
-                        torchaudio.save(tempPath, wav, _model.sr);
+                        throw new Exception($"Python TTS generation failed: {tempPath}");
                     }
-                    catch (PythonException ex)
+
+                    if (!File.Exists(tempPath))
                     {
-                        _logger.LogError("Python error during TTS generation: {Error}", ex.Message);
-                        throw;
+                        throw new FileNotFoundException($"Generated audio file not found: {tempPath}");
                     }
 
                     var bytes = File.ReadAllBytes(tempPath);
