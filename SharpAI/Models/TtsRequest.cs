@@ -35,7 +35,7 @@ namespace SharpAI.Models
         /// The format to audio in. Supported formats are mp3, opus, aac, flac, wav, and pcm.
         /// </summary>
         [JsonPropertyName("response_format")]
-        public string? ResponseFormat { get; set; } = "mp3";
+        public string? ResponseFormat { get; set; } = "wav";
 
         /// <summary>
         /// The speed of the generated audio. Select a value from 0.25 to 4.0. 1.0 is the default.
