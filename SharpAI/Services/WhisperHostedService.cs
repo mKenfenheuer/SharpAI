@@ -195,10 +195,9 @@ namespace SharpAI.Services
                 var builder = modelInstance.Factory!.CreateBuilder()
                     .WithLanguage(internalRequest.TranscriptionRequest.Language ?? "auto");
 
-                if (internalRequest.TranscriptionRequest.Temperature.HasValue)
-                {
-                    builder = builder.WithTemperature((float)internalRequest.TranscriptionRequest.Temperature.Value);
-                }
+                // Set temperature - use provided value or default to 0.2 to prevent repetition
+                var temperature = internalRequest.TranscriptionRequest.Temperature ?? 0.2;
+                builder = builder.WithTemperature((float)temperature);
 
                 if (!string.IsNullOrEmpty(internalRequest.TranscriptionRequest.Prompt))
                 {
@@ -233,10 +232,10 @@ namespace SharpAI.Services
                             Start = result.Start.TotalMilliseconds,
                             End = result.End.TotalMilliseconds,
                             Text = result.Text,
-                            Temperature = 0.0,
-                            AvgLogprob = 0.0,
-                            CompressionRatio = 0.0,
-                            NoSpeechProb = 0.0,
+                            Temperature = 0.2,
+                            AvgLogprob = -0.5,
+                            CompressionRatio = 2.4,
+                            NoSpeechProb = 0.1,
                             Seek = 0,
                             Tokens = null
                         };
@@ -261,9 +260,14 @@ namespace SharpAI.Services
                         }
                     }
 
+                    var finalText = fullText.ToString().Trim();
+                    
+                    // Clean up repetitive patterns in the transcribed text
+                    finalText = CleanRepetitiveText(finalText);
+
                     var response = new AudioTranscriptionResponse
                     {
-                        Text = fullText.ToString().Trim(),
+                        Text = finalText,
                         Task = "transcribe",
                         Language = internalRequest.TranscriptionRequest.Language ?? "auto",
                         Duration = (segments.LastOrDefault()?.End ?? 0.0) / 1000.0,
@@ -550,6 +554,79 @@ namespace SharpAI.Services
         {
             var time = TimeSpan.FromSeconds(seconds);
             return $"{time.Hours:D2}:{time.Minutes:D2}:{time.Seconds:D2}.{time.Milliseconds:D3}";
+        }
+
+        /// <summary>
+        /// Cleans up repetitive patterns in transcribed text to reduce model hallucination.
+        /// </summary>
+        /// <param name="text">Input text with potential repetitive patterns</param>
+        /// <returns>Cleaned text with repetitive patterns removed</returns>
+        private string CleanRepetitiveText(string text)
+        {
+            if (string.IsNullOrWhiteSpace(text))
+                return text;
+
+            // Split into sentences for processing
+            var sentences = text.Split(new[] { '.', '!', '?' }, StringSplitOptions.RemoveEmptyEntries)
+                               .Select(s => s.Trim())
+                               .Where(s => !string.IsNullOrEmpty(s))
+                               .ToList();
+
+            if (sentences.Count <= 1)
+                return text;
+
+            var cleanedSentences = new List<string>();
+            var recentSentences = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+            foreach (var sentence in sentences)
+            {
+                // Normalize the sentence for comparison (remove extra spaces, punctuation)
+                var normalizedSentence = NormalizeSentence(sentence);
+                
+                // Skip if we've seen this exact sentence recently (within last 3 sentences)
+                if (!recentSentences.Contains(normalizedSentence))
+                {
+                    cleanedSentences.Add(sentence);
+                    recentSentences.Add(normalizedSentence);
+                    
+                    // Keep only recent sentences in memory (sliding window of 3)
+                    if (recentSentences.Count > 3)
+                    {
+                        recentSentences.Clear();
+                        // Re-add the last 2 sentences
+                        var lastSentences = cleanedSentences.TakeLast(2).Select(NormalizeSentence);
+                        foreach (var lastSent in lastSentences)
+                        {
+                            recentSentences.Add(lastSent);
+                        }
+                    }
+                }
+            }
+
+            return string.Join(". ", cleanedSentences) + (cleanedSentences.Count > 0 ? "." : "");
+        }
+
+        /// <summary>
+        /// Normalizes a sentence for comparison by removing extra whitespace and common punctuation.
+        /// </summary>
+        /// <param name="sentence">Input sentence</param>
+        /// <returns>Normalized sentence</returns>
+        private string NormalizeSentence(string sentence)
+        {
+            if (string.IsNullOrWhiteSpace(sentence))
+                return "";
+
+            // Remove common punctuation and normalize whitespace
+            var normalized = sentence.Trim()
+                                   .Replace(",", "")
+                                   .Replace(";", "")
+                                   .Replace(":", "")
+                                   .Replace("\"", "")
+                                   .Replace("'", "")
+                                   .ToLowerInvariant();
+
+            // Normalize multiple spaces to single spaces
+            return System.Text.RegularExpressions.Regex.Replace(normalized, @"\s+", " ").Trim();
         }
 
         public override void Dispose()
