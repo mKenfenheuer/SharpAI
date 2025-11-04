@@ -175,7 +175,7 @@ namespace SharpAI.Services
         /// </summary>
         private async Task<WhisperInternalResponse> ProcessTranscriptionRequestAsync(WhisperInternalRequest internalRequest)
         {
-            var modelName = internalRequest.TranscriptionRequest.Model ?? "whisper-1";
+            var modelName = internalRequest.TranscriptionRequest.Model ?? "medium";
             _logger.LogInformation("Processing transcription request {RequestId} using model: {ModelName}", 
                 internalRequest.RequestId, modelName);
             
@@ -186,11 +186,8 @@ namespace SharpAI.Services
             }
             catch (ArgumentException ex)
             {
-                _logger.LogError(ex, "Invalid Whisper model requested: {ModelName}", modelName);
-                return new WhisperInternalResponse
-                {
-                    Error = new ArgumentException($"Whisper model '{modelName}' is not available. Available models: {string.Join(", ", _modelManager.GetAvailableModels())}", ex)
-                };
+                _logger.LogWarning("Invalid Whisper model requested: {ModelName} using whisper-medium", modelName);
+                modelInstance = await _modelManager.GetModelAsync("medium");
             }
 
             try
