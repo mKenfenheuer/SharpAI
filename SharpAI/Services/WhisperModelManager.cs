@@ -259,13 +259,13 @@ namespace SharpAI.Services
                 {
                     new WhisperModelConfiguration
                     {
-                        Name = "medium",
-                        GgmlType = GgmlType.Medium,
-                        Filename = "ggml-medium.bin",
-                        Description = "High accuracy, slower processing",
-                        SizeMB = 1520,
+                        Name = "large-v3-turbo",
+                        GgmlType = GgmlType.LargeV3,
+                        Filename = "ggml-large-v3-turbo.bin",
+                        Description = "Latest and most accurate model - Best quality (Turbo)",
+                        SizeMB = 1700,
                         Speed = "Slow",
-                        Accuracy = "High"
+                        Accuracy = "Best"
                     }
                 }
             };
