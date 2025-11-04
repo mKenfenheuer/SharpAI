@@ -47,8 +47,8 @@ namespace SharpAI.Services
             }
             catch (ArgumentException ex)
             {
-                _logger.LogError(ex, "Invalid Whisper model requested: {ModelName}", modelName);
-                throw new ArgumentException($"Whisper model '{modelName}' is not available. Available models: {string.Join(", ", _modelManager.GetAvailableModels())}", ex);
+                _logger.LogWarning("Invalid Whisper model requested: {ModelName} using whisper-medium", modelName);
+                modelInstance = await _modelManager.GetModelAsync("whisper-medium");
             }
 
             try

@@ -259,36 +259,6 @@ namespace SharpAI.Services
                 {
                     new WhisperModelConfiguration
                     {
-                        Name = "tiny",
-                        GgmlType = GgmlType.Tiny,
-                        Filename = "ggml-tiny.bin",
-                        Description = "Fastest, lowest accuracy - Good for real-time applications",
-                        SizeMB = 39,
-                        Speed = "Very Fast",
-                        Accuracy = "Low"
-                    },
-                    new WhisperModelConfiguration
-                    {
-                        Name = "base",
-                        GgmlType = GgmlType.Base,
-                        Filename = "ggml-base.bin",
-                        Description = "Balanced speed and accuracy - Default model",
-                        SizeMB = 142,
-                        Speed = "Fast",
-                        Accuracy = "Good"
-                    },
-                    new WhisperModelConfiguration
-                    {
-                        Name = "small",
-                        GgmlType = GgmlType.Small,
-                        Filename = "ggml-small.bin",
-                        Description = "Good accuracy, moderate speed",
-                        SizeMB = 466,
-                        Speed = "Medium",
-                        Accuracy = "Better"
-                    },
-                    new WhisperModelConfiguration
-                    {
                         Name = "medium",
                         GgmlType = GgmlType.Medium,
                         Filename = "ggml-medium.bin",
@@ -296,89 +266,9 @@ namespace SharpAI.Services
                         SizeMB = 1520,
                         Speed = "Slow",
                         Accuracy = "High"
-                    },
-                    new WhisperModelConfiguration
-                    {
-                        Name = "large-v1",
-                        GgmlType = GgmlType.LargeV1,
-                        Filename = "ggml-large-v1.bin",
-                        Description = "Highest accuracy, slowest processing - Original large model",
-                        SizeMB = 2900,
-                        Speed = "Very Slow",
-                        Accuracy = "Highest"
-                    },
-                    new WhisperModelConfiguration
-                    {
-                        Name = "large-v2",
-                        GgmlType = GgmlType.LargeV2,
-                        Filename = "ggml-large-v2.bin",
-                        Description = "Highest accuracy, slowest processing - Improved large model",
-                        SizeMB = 2900,
-                        Speed = "Very Slow",
-                        Accuracy = "Highest"
-                    },
-                    new WhisperModelConfiguration
-                    {
-                        Name = "large-v3",
-                        GgmlType = GgmlType.LargeV3,
-                        Filename = "ggml-large-v3.bin",
-                        Description = "Latest and most accurate model - Best quality",
-                        SizeMB = 2900,
-                        Speed = "Very Slow",
-                        Accuracy = "Best"
-                    },
-                    new WhisperModelConfiguration
-                    {
-                        Name = "large-v3-turbo",
-                        GgmlType = GgmlType.LargeV3,
-                        Filename = "ggml-large-v3-turbo.bin",
-                        Description = "Latest and most accurate model - Best quality (Turbo)",
-                        SizeMB = 1700,
-                        Speed = "Slow",
-                        Accuracy = "Best"
                     }
                 }
             };
-
-            // Try to load from configuration file if it exists
-            var configPath = Path.Combine("Data", "whisper-models-config.json");
-            if (File.Exists(configPath))
-            {
-                try
-                {
-                    var configJson = File.ReadAllText(configPath);
-                    var loadedConfig = JsonSerializer.Deserialize<WhisperModelsConfiguration>(configJson, new JsonSerializerOptions
-                    {
-                        PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower
-                    });
-
-                    if (loadedConfig?.Models?.Any() == true)
-                    {
-                        _logger.LogInformation("Loaded Whisper models configuration from {ConfigPath}", configPath);
-                        return loadedConfig;
-                    }
-                }
-                catch (Exception ex)
-                {
-                    _logger.LogWarning(ex, "Failed to load Whisper models configuration from {ConfigPath}, using defaults", configPath);
-                }
-            }
-
-            // Save default configuration for reference
-            try
-            {
-                var defaultConfigJson = JsonSerializer.Serialize(defaultConfig, new JsonSerializerOptions
-                {
-                    PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower,
-                    WriteIndented = true
-                });
-                File.WriteAllText(configPath, defaultConfigJson);
-                _logger.LogInformation("Created default Whisper models configuration at {ConfigPath}", configPath);
-            }
-            catch (Exception ex)
-            {
-                _logger.LogWarning(ex, "Failed to save default Whisper models configuration");
-            }
 
             return defaultConfig;
         }
