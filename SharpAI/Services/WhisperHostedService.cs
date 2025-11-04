@@ -175,7 +175,7 @@ namespace SharpAI.Services
         /// </summary>
         private async Task<WhisperInternalResponse> ProcessTranscriptionRequestAsync(WhisperInternalRequest internalRequest)
         {
-            var modelName = internalRequest.TranscriptionRequest.Model ?? "medium";
+            var modelName = internalRequest.TranscriptionRequest.Model ?? "large-v3-turbo";
             _logger.LogInformation("Processing transcription request {RequestId} using model: {ModelName}", 
                 internalRequest.RequestId, modelName);
             
@@ -186,8 +186,8 @@ namespace SharpAI.Services
             }
             catch (ArgumentException ex)
             {
-                _logger.LogWarning("Invalid Whisper model requested: {ModelName} using whisper-medium", modelName);
-                modelInstance = await _modelManager.GetModelAsync("medium");
+                _logger.LogWarning("Invalid Whisper model requested: {ModelName} using large-v3-turbo", modelName);
+                modelInstance = await _modelManager.GetModelAsync("large-v3-turbo");
             }
 
             try
