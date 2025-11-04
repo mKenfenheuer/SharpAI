@@ -37,7 +37,7 @@ namespace SharpAI.Services
     /// <returns>Full transcription response</returns>
     public async Task<AudioTranscriptionResponse> TranscribeAsync(Stream audioStream, AudioTranscriptionRequest request)
         {
-            var modelName = request.Model ?? "whisper-medium"; // Default to whisper-medium (medium model)
+            var modelName = request.Model ?? "medium"; // Default to whisper-medium (medium model)
             _logger.LogInformation("Using Whisper model: {ModelName}", modelName);
             
             WhisperModelInstance modelInstance;
@@ -48,7 +48,7 @@ namespace SharpAI.Services
             catch (ArgumentException ex)
             {
                 _logger.LogWarning("Invalid Whisper model requested: {ModelName} using whisper-medium", modelName);
-                modelInstance = await _modelManager.GetModelAsync("whisper-medium");
+                modelInstance = await _modelManager.GetModelAsync("medium");
             }
 
             try
