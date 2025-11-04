@@ -1,4 +1,12 @@
-FROM mkenfenheuer/sharpai-cuda-base AS base
+# FROM nvidia/cuda:12.4.0-runtime-ubuntu22.04 AS base
+FROM nvidia/cuda:12.4.0-runtime-ubuntu22.04 AS base
+RUN apt-get update && apt-get install -y \
+    curl \
+    wget \
+    ca-certificates \
+    ffmpeg \
+    git \
+    && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 EXPOSE 80
@@ -24,7 +32,7 @@ FROM base AS final
 WORKDIR /app
 COPY --from=publish /app/publish .
 RUN cp /app/runtimes/cuda/linux-x64/*.so /app/runtimes/linux-x64/
-RUN pip install -r runtimes/python/requirements.txt
+
 # ensure the self-contained native executable is runnable
 RUN if [ -f /app/SharpAI ]; then chmod +x /app/SharpAI; fi
 
