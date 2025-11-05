@@ -262,18 +262,23 @@ namespace SharpAI.Services
             WhisperInternalRequest internalRequest)
         {
             var tempWavFile = Path.GetTempFileName() + ".wav";
+            var normalizedFile = "";
             
             try
             {
-                // Save the audio stream to a temporary WAV file for analysis
+                // Save the audio stream to a temporary WAV file
                 using (var fileStream = File.Create(tempWavFile))
                 {
                     internalRequest.AudioStream.Position = 0;
                     await internalRequest.AudioStream.CopyToAsync(fileStream);
                 }
 
-                // Detect audio segments with speech content
-                var audioSegments = await DetectAudioSegmentsAsync(tempWavFile);
+                // First normalize loudness to handle very quiet files, then detect silence
+                normalizedFile = Path.GetTempFileName() + ".wav";
+                await ApplyAudioPreprocessingAsync(tempWavFile, normalizedFile, optimizeForSilenceDetection: true);
+                
+                // Detect audio segments with speech content using the normalized audio
+                var audioSegments = await DetectAudioSegmentsAsync(normalizedFile);
                 _logger.LogInformation("Found {SegmentCount} audio segments to transcribe", audioSegments.Count);
 
                 var transcriptionSegments = new List<TranscriptionSegment>();
@@ -287,8 +292,8 @@ namespace SharpAI.Services
                 {
                     try
                     {
-                        // Extract the audio segment to a temporary file
-                        var segmentFile = await ExtractAudioSegmentAsync(tempWavFile, audioSegment);
+                        // Extract the audio segment from the normalized file (same file used for silence detection)
+                        var segmentFile = await ExtractAudioSegmentAsync(normalizedFile, audioSegment);
                         
                         // Validate audio quality before transcription
                         if (!await HasSufficientAudioEnergyAsync(segmentFile))
@@ -298,7 +303,7 @@ namespace SharpAI.Services
                             try { File.Delete(segmentFile); } catch { }
                             continue;
                         }
-                        
+
                         using var segmentStream = File.OpenRead(segmentFile);
                         
                         // Collect all results from this segment first
@@ -430,35 +435,43 @@ namespace SharpAI.Services
             }
             finally
             {
-                // Clean up temporary file
+                // Clean up temporary files
                 try { if (File.Exists(tempWavFile)) File.Delete(tempWavFile); } catch { }
+                try { if (!string.IsNullOrEmpty(normalizedFile) && File.Exists(normalizedFile)) File.Delete(normalizedFile); } catch { }
             }
         }
 
         /// <summary>
-        /// Extracts a specific time segment from an audio file with audio enhancement
+        /// Extracts a specific time segment from an audio file with audio enhancement and loudness normalization
         /// </summary>
         private async Task<string> ExtractAudioSegmentAsync(string sourceFile, AudioSegment segment)
         {
             var outputFile = Path.GetTempFileName() + ".wav";
+            var tempSegmentFile = Path.GetTempFileName() + ".wav";
             
             try
             {
-                // Add small padding to segment boundaries and apply audio enhancement
+                // Add small padding to segment boundaries
                 var startTime = Math.Max(segment.StartTime - 0.2, 0); // Smaller padding to avoid silence
                 var duration = segment.Duration + 0.4; // Minimal padding
                 
+                // First extract the segment
                 await FFMpegArguments
                     .FromFileInput(sourceFile)
-                    .OutputToFile(outputFile, true, options => options
+                    .OutputToFile(tempSegmentFile, true, options => options
                         .Seek(TimeSpan.FromSeconds(startTime))
                         .WithDuration(TimeSpan.FromSeconds(duration))
                         .WithCustomArgument("-ar 16000") // 16kHz sample rate
                         .WithCustomArgument("-ac 1") // Mono
                         .WithCustomArgument("-acodec pcm_s16le") // 16-bit PCM
-                        .WithCustomArgument("-af highpass=f=80,lowpass=f=8000,volume=1.2") // Basic audio enhancement
                         .ForceFormat("wav"))
                     .ProcessAsynchronously();
+                
+                // Apply speech-optimized preprocessing
+                await ApplyAudioPreprocessingAsync(tempSegmentFile, outputFile, optimizeForSilenceDetection: false);
+                
+                // Clean up temporary file
+                try { File.Delete(tempSegmentFile); } catch { }
                 
                 return outputFile;
             }
@@ -466,6 +479,11 @@ namespace SharpAI.Services
             {
                 _logger.LogError(ex, "Failed to extract audio segment {Start}-{End}", 
                     segment.StartTime, segment.EndTime);
+                
+                // Clean up temporary files
+                try { File.Delete(tempSegmentFile); } catch { }
+                try { File.Delete(outputFile); } catch { }
+                
                 throw;
             }
         }
@@ -519,9 +537,10 @@ namespace SharpAI.Services
                     }
                 }
 
-                // Reject segments that are too quiet
-                // Mean volume should be above -40dB and max volume above -20dB for meaningful speech
-                var hasSufficientEnergy = meanVolume > -40.0 && maxVolume > -20.0;
+                // Adjust thresholds for loudness-normalized audio
+                // With loudness normalization, we can use more relaxed thresholds
+                // Mean volume should be above -50dB and max volume above -30dB for meaningful speech
+                var hasSufficientEnergy = meanVolume > -50.0 && maxVolume > -30.0;
                 
                 if (!hasSufficientEnergy)
                 {
@@ -677,6 +696,71 @@ namespace SharpAI.Services
         }
 
         /// <summary>
+        /// Applies audio preprocessing with fallback options
+        /// </summary>
+        /// <param name="inputFile">Input audio file path</param>
+        /// <param name="outputFile">Output audio file path</param>
+        /// <param name="optimizeForSilenceDetection">Whether to optimize for silence detection vs speech recognition</param>
+        /// <returns>True if advanced preprocessing succeeded, false if basic conversion was used</returns>
+        private async Task<bool> ApplyAudioPreprocessingAsync(string inputFile, string outputFile, bool optimizeForSilenceDetection = false)
+        {
+            var baseArgs = "-ar 16000 -ac 1 -acodec pcm_s16le";
+            
+            var filterOptions = optimizeForSilenceDetection 
+                ? "loudnorm=I=-23:TP=-2:LRA=7" // Conservative for silence detection
+                : "highpass=f=80,lowpass=f=8000,loudnorm=I=-16:TP=-1.5:LRA=11,dynaudnorm=f=500:g=31"; // Full speech optimization
+
+            try
+            {
+                // Try advanced preprocessing first
+                await FFMpegArguments
+                    .FromFileInput(inputFile)
+                    .OutputToFile(outputFile, true, options => options
+                        .WithCustomArgument(baseArgs)
+                        .WithCustomArgument($"-af {filterOptions}")
+                        .ForceFormat("wav"))
+                    .ProcessAsynchronously();
+                
+                _logger.LogDebug("Applied {ProcessingType} audio preprocessing", 
+                    optimizeForSilenceDetection ? "silence detection" : "speech recognition");
+                return true;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Advanced preprocessing failed, trying basic normalization");
+                
+                try
+                {
+                    // Fallback to basic loudness normalization
+                    await FFMpegArguments
+                        .FromFileInput(inputFile)
+                        .OutputToFile(outputFile, true, options => options
+                            .WithCustomArgument(baseArgs)
+                            .WithCustomArgument("-af loudnorm=I=-16:TP=-1.5:LRA=11")
+                            .ForceFormat("wav"))
+                        .ProcessAsynchronously();
+                    
+                    _logger.LogDebug("Applied basic loudness normalization");
+                    return true;
+                }
+                catch (Exception fallbackEx)
+                {
+                    _logger.LogWarning(fallbackEx, "Basic preprocessing failed, using simple conversion");
+                    
+                    // Final fallback to simple conversion
+                    await FFMpegArguments
+                        .FromFileInput(inputFile)
+                        .OutputToFile(outputFile, true, options => options
+                            .WithCustomArgument(baseArgs)
+                            .ForceFormat("wav"))
+                        .ProcessAsynchronously();
+                    
+                    return false;
+                }
+            }
+        }
+
+        /// <summary>
         /// Converts any audio format to WAV 16kHz mono format suitable for Whisper processing.
         /// Removes silent audio segments to prevent model repetition issues.
         /// </summary>
@@ -699,11 +783,10 @@ namespace SharpAI.Services
                         await inputAudioStream.CopyToAsync(fileStream);
                     }
 
-                    // Convert to WAV 16kHz mono using FFMpeg, Remove silence from audio to prevent repetition issues
+                    // Convert to WAV 16kHz mono using FFMpeg (without loudness normalization for silence detection)
                     await FFMpegArguments
                         .FromFileInput(tempInputFile)
                         .OutputToFile(tempOutputFile, true, options => options
-                            //.WithCustomArgument("-af silenceremove=stop_periods=-1:stop_duration=1:stop_threshold=-50dB")
                             .WithCustomArgument("-ar 16000") // 16kHz sample rate
                             .WithCustomArgument("-ac 1") // Mono
                             .WithCustomArgument("-acodec pcm_s16le") // 16-bit PCM
@@ -718,7 +801,7 @@ namespace SharpAI.Services
                     }
 
                     outputStream.Position = 0;
-                    _logger.LogInformation("Successfully converted audio from {InputFileName} to WAV 16kHz mono with silence removed", inputFileName);
+                    _logger.LogInformation("Successfully converted audio from {InputFileName} to WAV 16kHz mono", inputFileName);
                     return outputStream;
                 }
                 finally
@@ -755,12 +838,12 @@ namespace SharpAI.Services
 
             try
             {
-                // Use ffmpeg silencedetect filter to detect silence periods
-                // Very aggressive silence detection: -35dB threshold, 1.5 seconds minimum silence
+                // Use ffmpeg silencedetect filter to detect silence periods on normalized audio
+                // Adjusted parameters for loudness-normalized audio: -50dB threshold, 2.0 seconds minimum silence
                 var processInfo = new System.Diagnostics.ProcessStartInfo
                 {
                     FileName = "ffmpeg",
-                    Arguments = $"-i \"{wavFilePath}\" -af silencedetect=noise=-40dB:duration=1.5 -f null -",
+                    Arguments = $"-i \"{wavFilePath}\" -af silencedetect=noise=-15dB:duration=2.0 -f null -",
                     RedirectStandardError = true,
                     UseShellExecute = false,
                     CreateNoWindow = true
@@ -772,9 +855,9 @@ namespace SharpAI.Services
 
                 // Parse the silence detection output
                 segments = ParseSilenceDetectionOutput(stderr, wavFilePath);
-                
-                // Filter segments: minimum 2 seconds duration to avoid short segments that cause hallucinations
-                segments = segments.Where(s => s.Duration >= 2).ToList();
+
+                // Filter segments: minimum 0.75 seconds duration to avoid short segments that cause hallucinations
+                segments = segments.Where(s => s.Duration >= 0.75).ToList();
                 
                 _logger.LogInformation("Detected {SegmentCount} audio segments in file (after filtering)", segments.Count);
                 return segments;
@@ -856,9 +939,13 @@ namespace SharpAI.Services
             {
                 // No silence detected, entire file is one segment
                 segments.Add(new AudioSegment { StartTime = 0, EndTime = totalDuration });
+                _logger.LogDebug("No silence detected, using entire audio as single segment: 0s - {Duration}s", totalDuration);
             }
             else
             {
+                _logger.LogDebug("Detected {SilenceStarts} silence starts and {SilenceEnds} silence ends", 
+                    silenceStarts.Count, silenceEnds.Count);
+                
                 double currentStart = 0;
 
                 // Combine silence starts and ends to create audio segments
@@ -873,18 +960,39 @@ namespace SharpAI.Services
                     {
                         // Found start of silence, add audio segment before it
                         segments.Add(new AudioSegment { StartTime = currentStart, EndTime = time });
+                        // Update currentStart to the silence start position to track our position
+                        currentStart = time;
                     }
                     else if (!isStart)
                     {
-                        // Found end of silence, update current start
+                        // Found end of silence, update current start to where audio resumes
                         currentStart = time;
                     }
                 }
 
                 // Add final segment if there's audio after the last silence
+                // Only add if currentStart is before the end and it's not at a silence start position
                 if (currentStart < totalDuration)
                 {
-                    segments.Add(new AudioSegment { StartTime = currentStart, EndTime = totalDuration });
+                    // Check if the last event was a silence start (meaning audio ends with silence)
+                    var lastEvent = allSilenceEvents.LastOrDefault();
+                    bool endsWithSilence = lastEvent.isStart; // Last event is silence_start with no corresponding end
+                    
+                    if (!endsWithSilence)
+                    {
+                        segments.Add(new AudioSegment { StartTime = currentStart, EndTime = totalDuration });
+                        _logger.LogDebug("Added final audio segment: {Start}s - {End}s", currentStart, totalDuration);
+                    }
+                    else
+                    {
+                        _logger.LogDebug("Audio ends with silence starting at {SilenceStart}s, not adding final segment", 
+                            lastEvent.time);
+                    }
+                }
+                else
+                {
+                    _logger.LogDebug("No final segment needed: currentStart={CurrentStart}s >= totalDuration={TotalDuration}s", 
+                        currentStart, totalDuration);
                 }
             }
 
@@ -932,25 +1040,43 @@ namespace SharpAI.Services
         }
 
         /// <summary>
+        /// Formats transcription segments as subtitles (SRT or WebVTT format)
+        /// </summary>
+        /// <param name="segments">Transcription segments to format</param>
+        /// <param name="isVtt">True for WebVTT format, false for SRT format</param>
+        /// <returns>Formatted subtitle string</returns>
+        private string FormatAsSubtitles(List<TranscriptionSegment>? segments, bool isVtt = false)
+        {
+            if (segments == null || segments.Count == 0)
+                return isVtt ? "WEBVTT\n\n" : "";
+
+            var subtitle = new StringBuilder(isVtt ? "WEBVTT\n\n" : "");
+            
+            for (int i = 0; i < segments.Count; i++)
+            {
+                var segment = segments[i];
+                
+                if (!isVtt)
+                {
+                    subtitle.AppendLine($"{i + 1}");
+                }
+                
+                subtitle.AppendLine($"{FormatTime(segment.Start, isVtt)} --> {FormatTime(segment.End, isVtt)}");
+                subtitle.AppendLine(segment.Text);
+                subtitle.AppendLine();
+            }
+            
+            return subtitle.ToString();
+        }
+
+        /// <summary>
         /// Formats subtitle timestamps for SRT format.
         /// </summary>
         /// <param name="segments">Transcription segments to format</param>
         /// <returns>SRT-formatted subtitle string</returns>
         private string FormatAsSrt(List<TranscriptionSegment>? segments)
         {
-            if (segments == null || segments.Count == 0)
-                return "";
-
-            var srt = new StringBuilder();
-            for (int i = 0; i < segments.Count; i++)
-            {
-                var segment = segments[i];
-                srt.AppendLine($"{i + 1}");
-                srt.AppendLine($"{FormatTime(segment.Start)} --> {FormatTime(segment.End)}");
-                srt.AppendLine(segment.Text);
-                srt.AppendLine();
-            }
-            return srt.ToString();
+            return FormatAsSubtitles(segments, isVtt: false);
         }
 
         /// <summary>
@@ -960,29 +1086,17 @@ namespace SharpAI.Services
         /// <returns>WebVTT-formatted subtitle string</returns>
         private string FormatAsVtt(List<TranscriptionSegment>? segments)
         {
-            if (segments == null || segments.Count == 0)
-                return "WEBVTT\n\n";
-
-            var vtt = new StringBuilder("WEBVTT\n\n");
-            foreach (var segment in segments)
-            {
-                vtt.AppendLine($"{FormatTimeVtt(segment.Start)} --> {FormatTimeVtt(segment.End)}");
-                vtt.AppendLine(segment.Text);
-                vtt.AppendLine();
-            }
-            return vtt.ToString();
+            return FormatAsSubtitles(segments, isVtt: true);
         }
 
-        private string FormatTime(double seconds)
+        /// <summary>
+        /// Formats time in different subtitle formats
+        /// </summary>
+        private string FormatTime(double seconds, bool isVtt = false)
         {
             var time = TimeSpan.FromSeconds(seconds);
-            return $"{time.Hours:D2}:{time.Minutes:D2}:{time.Seconds:D2},{time.Milliseconds:D3}";
-        }
-
-        private string FormatTimeVtt(double seconds)
-        {
-            var time = TimeSpan.FromSeconds(seconds);
-            return $"{time.Hours:D2}:{time.Minutes:D2}:{time.Seconds:D2}.{time.Milliseconds:D3}";
+            var separator = isVtt ? "." : ",";
+            return $"{time.Hours:D2}:{time.Minutes:D2}:{time.Seconds:D2}{separator}{time.Milliseconds:D3}";
         }
 
         /// <summary>
@@ -1074,54 +1188,39 @@ namespace SharpAI.Services
             if (cleanText.Length < 4)
                 return true;
 
-            // Common hallucination patterns in Whisper
-            var hallucinationPatterns = new[]
+            // Common hallucination patterns in Whisper (consolidated list)
+            var hallucinationPatterns = new HashSet<string>
             {
-                // Common filler phrases
+                // Polite phrases and fillers
                 "thank you", "thanks", "bye", "goodbye", "have a nice day", "have a good day",
                 "see you", "see you later", "take care", "you're welcome", "welcome",
-                
-                // Music/noise interpretations
-                "music", "applause", "clapping", "noise", "static", "beep", "beeping",
-                "[music]", "[applause]", "[noise]", "[static]", "[beep]", "(music)", "(applause)",
-                
-                // Common misinterpretations of silence
                 "hmm", "mm", "mm-hmm", "uh", "ah", "eh", "oh", "okay", "ok", "right", "yes", "yeah", "yep",
                 
-                // Subtitle artifacts
+                // Media artifacts
+                "music", "applause", "clapping", "noise", "static", "beep", "beeping",
+                "[music]", "[applause]", "[noise]", "[static]", "[beep]", "(music)", "(applause)",
                 "subtitles", "captions", "transcript", "transcription", "closed captions",
+                
+                // Web artifacts and single words
                 "www.", ".com", ".org", ".net", "http", "https",
-                
-                // Language indicators (common hallucinations)
                 "english", "spanish", "french", "german", "chinese", "japanese", "korean",
-                
-                // Common artifacts
                 "...", ".", "..", "....", ".....", 
                 "the", "a", "an", "and", "or", "but", "in", "on", "at", "to", "for", "of", "with", "by"
             };
 
-            // Check if the entire text matches a hallucination pattern
+            // Quick pattern check
             if (hallucinationPatterns.Contains(cleanText))
                 return true;
 
-            // Check for single repeated characters (e.g., "aaaa", "mmmm")
-            if (cleanText.Length >= 3 && cleanText.All(c => c == cleanText[0]))
+            // Check for repetitive patterns or insufficient letter content
+            if ((cleanText.Length >= 3 && cleanText.All(c => c == cleanText[0])) ||
+                (cleanText.Length <= 10 && IsVeryRepetitive(cleanText)) ||
+                (System.Text.RegularExpressions.Regex.IsMatch(cleanText, @"^[^a-z]*$") && cleanText.Length < 10))
                 return true;
 
-            // Check for very repetitive short patterns
-            if (cleanText.Length <= 10 && IsVeryRepetitive(cleanText))
-                return true;
-
-            // Check for non-speech sounds transcribed as text
-            if (System.Text.RegularExpressions.Regex.IsMatch(cleanText, @"^[^a-z]*$") && cleanText.Length < 10)
-                return true;
-
-            // Check for excessive punctuation or special characters
+            // Check letter density
             var letterCount = cleanText.Count(char.IsLetter);
-            if (letterCount == 0 || (double)letterCount / cleanText.Length < 0.5)
-                return true;
-
-            return false;
+            return letterCount == 0 || (double)letterCount / cleanText.Length < 0.5;
         }
 
         /// <summary>
