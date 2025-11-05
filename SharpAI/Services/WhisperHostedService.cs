@@ -199,9 +199,10 @@ namespace SharpAI.Services
                 if (internalRequest.TranscriptionRequest.Temperature != null)
                     builder.WithTemperature((float)internalRequest.TranscriptionRequest.Temperature);
                 
-                builder.WithTemperature(0.4f);
-                builder.WithEntropyThreshold(2.0f);
-                builder.WithLogProbThreshold(-1.0f);
+                builder.WithTemperature(0.6f);
+                builder.WithEntropyThreshold(3.0f);
+                builder.WithLogProbThreshold(-2.0f);
+                builder.WithNoSpeechThreshold(0.6f);
                 builder.WithBeamSearchSamplingStrategy();
 
                 if (!string.IsNullOrEmpty(internalRequest.TranscriptionRequest.Prompt))
@@ -470,7 +471,7 @@ namespace SharpAI.Services
                     await FFMpegArguments
                         .FromFileInput(tempInputFile)
                         .OutputToFile(tempOutputFile, true, options => options
-                            .WithCustomArgument("-af silenceremove=stop_periods=-1:stop_duration=1:stop_threshold=-50dB")
+                            //.WithCustomArgument("-af silenceremove=stop_periods=-1:stop_duration=1:stop_threshold=-50dB")
                             .WithCustomArgument("-ar 16000") // 16kHz sample rate
                             .WithCustomArgument("-ac 1") // Mono
                             .WithCustomArgument("-acodec pcm_s16le") // 16-bit PCM
