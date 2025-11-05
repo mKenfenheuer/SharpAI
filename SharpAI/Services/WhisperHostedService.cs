@@ -39,14 +39,14 @@ namespace SharpAI.Services
             _modelManager = modelManager;
             _logger = logger;
             _environment = environment;
-            
+
             var options = new BoundedChannelOptions(50)
             {
                 FullMode = BoundedChannelFullMode.Wait,
                 SingleReader = true,
                 SingleWriter = false
             };
-            
+
             _requestChannel = System.Threading.Channels.Channel.CreateBounded<WhisperInternalRequest>(options);
             _requestWriter = _requestChannel.Writer;
             _requestReader = _requestChannel.Reader;
@@ -64,13 +64,13 @@ namespace SharpAI.Services
                 }
 
                 _logger.LogInformation("WhisperHostedService started, processing transcription requests...");
-                
+
                 await foreach (var request in _requestReader.ReadAllAsync(stoppingToken))
                 {
                     try
                     {
                         var result = await ProcessTranscriptionRequestAsync(request);
-                        
+
                         if (_pendingRequests.TryRemove(request.RequestId, out var tcs))
                         {
                             tcs.SetResult(result);
@@ -79,7 +79,7 @@ namespace SharpAI.Services
                     catch (Exception ex)
                     {
                         _logger.LogError(ex, "Error processing transcription request {RequestId}", request.RequestId);
-                        
+
                         if (_pendingRequests.TryRemove(request.RequestId, out var tcs))
                         {
                             tcs.SetException(ex);
@@ -103,7 +103,7 @@ namespace SharpAI.Services
             try
             {
                 _logger.LogInformation("Warming up WhisperHostedService model...");
-                
+
                 // Create a minimal WAV file for testing (1 second of silence at 16kHz)
                 var sampleRate = 16000;
                 var duration = 1.0; // 1 second
@@ -129,7 +129,7 @@ namespace SharpAI.Services
                 };
 
                 Array.Copy(header, audioData, header.Length);
-                
+
                 // Fill file size and data size
                 var fileSize = audioData.Length - 8;
                 var dataSize = samples * 2;
@@ -137,7 +137,7 @@ namespace SharpAI.Services
                 BitConverter.GetBytes(dataSize).CopyTo(audioData, 40);
 
                 using var audioStream = new MemoryStream(audioData);
-                
+
                 var warmupRequest = new AudioTranscriptionRequest
                 {
                     Model = "whisper-medium",
@@ -154,7 +154,7 @@ namespace SharpAI.Services
                 };
 
                 var warmupResult = await ProcessTranscriptionRequestAsync(warmupInternalRequest);
-                
+
                 if (warmupResult.Error != null)
                 {
                     _logger.LogWarning("Warmup transcription had error: {Error}", warmupResult.Error.Message);
@@ -176,9 +176,9 @@ namespace SharpAI.Services
         private async Task<WhisperInternalResponse> ProcessTranscriptionRequestAsync(WhisperInternalRequest internalRequest)
         {
             var modelName = internalRequest.TranscriptionRequest.Model ?? "large-v3-turbo";
-            _logger.LogInformation("Processing transcription request {RequestId} using model: {ModelName}", 
+            _logger.LogInformation("Processing transcription request {RequestId} using model: {ModelName}",
                 internalRequest.RequestId, modelName);
-            
+
             WhisperModelInstance modelInstance;
             try
             {
@@ -192,12 +192,17 @@ namespace SharpAI.Services
 
             try
             {
-                var builder = modelInstance.Factory!.CreateBuilder()
-                    .WithLanguage(internalRequest.TranscriptionRequest.Language ?? "auto");
+                var builder = modelInstance.Factory!.CreateBuilder();
+                if(internalRequest.TranscriptionRequest.Language != null)
+                    builder.WithLanguage( internalRequest.TranscriptionRequest.Language);
 
-                // Set temperature - use provided value or default to 0.2 to prevent repetition
-                var temperature = internalRequest.TranscriptionRequest.Temperature ?? 0.2;
-                builder = builder.WithTemperature((float)temperature);
+                if (internalRequest.TranscriptionRequest.Temperature != null)
+                    builder.WithTemperature((float)internalRequest.TranscriptionRequest.Temperature);
+                
+                builder.WithTemperature(0.4f);
+                builder.WithEntropyThreshold(2.0f);
+                builder.WithLogProbThreshold(-1.0f);
+                builder.WithBeamSearchSamplingStrategy();
 
                 if (!string.IsNullOrEmpty(internalRequest.TranscriptionRequest.Prompt))
                 {
@@ -247,7 +252,7 @@ namespace SharpAI.Services
                         {
                             var wordsInSegment = result.Text.Split(' ', StringSplitOptions.RemoveEmptyEntries);
                             var wordDurationMs = (result.End - result.Start).TotalMilliseconds / wordsInSegment.Length;
-                            
+
                             for (int i = 0; i < wordsInSegment.Length; i++)
                             {
                                 words.Add(new TranscriptionWord
@@ -261,7 +266,7 @@ namespace SharpAI.Services
                     }
 
                     var finalText = fullText.ToString().Trim();
-                    
+
                     // Clean up repetitive patterns in the transcribed text
                     finalText = CleanRepetitiveText(finalText);
 
@@ -304,8 +309,8 @@ namespace SharpAI.Services
         /// Processes streaming transcription asynchronously
         /// </summary>
         private async IAsyncEnumerable<AudioTranscriptionChunk> ProcessStreamingTranscriptionAsync(
-            WhisperProcessor processor, 
-            Stream audioStream, 
+            WhisperProcessor processor,
+            Stream audioStream,
             string requestId)
         {
             var segmentCount = 0;
@@ -341,7 +346,7 @@ namespace SharpAI.Services
         {
             var requestId = Guid.NewGuid().ToString();
             var tcs = new TaskCompletionSource<WhisperInternalResponse>();
-            
+
             var internalRequest = new WhisperInternalRequest
             {
                 RequestId = requestId,
@@ -356,10 +361,10 @@ namespace SharpAI.Services
             {
                 await _requestWriter.WriteAsync(internalRequest);
                 var response = await tcs.Task;
-                
+
                 if (response.Error != null)
                     throw response.Error;
-                    
+
                 return response.TranscriptionResponse!;
             }
             catch
@@ -379,7 +384,7 @@ namespace SharpAI.Services
         {
             var requestId = Guid.NewGuid().ToString();
             var tcs = new TaskCompletionSource<WhisperInternalResponse>();
-            
+
             var internalRequest = new WhisperInternalRequest
             {
                 RequestId = requestId,
@@ -392,11 +397,11 @@ namespace SharpAI.Services
 
             await _requestWriter.WriteAsync(internalRequest);
             WhisperInternalResponse response;
-            
+
             try
             {
                 response = await tcs.Task;
-                
+
                 if (response.Error != null)
                     throw response.Error;
             }
@@ -405,7 +410,7 @@ namespace SharpAI.Services
                 _pendingRequests.TryRemove(requestId, out _);
                 throw;
             }
-                    
+
             await foreach (var chunk in response.StreamingResponse!)
             {
                 yield return chunk;
@@ -423,12 +428,12 @@ namespace SharpAI.Services
             return format switch
             {
                 AudioResponseFormat.Text => response.Text ?? "",
-                AudioResponseFormat.Json => JsonSerializer.Serialize(new { text = response.Text }, new JsonSerializerOptions 
-                { 
-                    PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower 
+                AudioResponseFormat.Json => JsonSerializer.Serialize(new { text = response.Text }, new JsonSerializerOptions
+                {
+                    PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower
                 }),
-                AudioResponseFormat.VerboseJson => JsonSerializer.Serialize(response, new JsonSerializerOptions 
-                { 
+                AudioResponseFormat.VerboseJson => JsonSerializer.Serialize(response, new JsonSerializerOptions
+                {
                     PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower,
                     DefaultIgnoreCondition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull
                 }),
@@ -440,15 +445,16 @@ namespace SharpAI.Services
 
         /// <summary>
         /// Converts any audio format to WAV 16kHz mono format suitable for Whisper processing.
+        /// Removes silent audio segments to prevent model repetition issues.
         /// </summary>
         /// <param name="inputAudioStream">Input audio stream in any format</param>
         /// <param name="inputFileName">Original filename to help determine format</param>
-        /// <returns>Stream containing WAV 16kHz mono audio</returns>
+        /// <returns>Stream containing WAV 16kHz mono audio with silence removed</returns>
         public async Task<Stream> ConvertToWav16kHzAsync(Stream inputAudioStream, string inputFileName)
         {
             try
             {
-                // Create temporary files for input and output
+                // Create temporary files for input, intermediate, and output
                 var tempInputFile = Path.GetTempFileName();
                 var tempOutputFile = Path.ChangeExtension(Path.GetTempFileName(), ".wav");
 
@@ -460,10 +466,11 @@ namespace SharpAI.Services
                         await inputAudioStream.CopyToAsync(fileStream);
                     }
 
-                    // Convert to WAV 16kHz mono using FFMpeg
+                    // Convert to WAV 16kHz mono using FFMpeg, Remove silence from audio to prevent repetition issues
                     await FFMpegArguments
                         .FromFileInput(tempInputFile)
                         .OutputToFile(tempOutputFile, true, options => options
+                            .WithCustomArgument("-af silenceremove=stop_periods=-1:stop_duration=1:stop_threshold=-50dB")
                             .WithCustomArgument("-ar 16000") // 16kHz sample rate
                             .WithCustomArgument("-ac 1") // Mono
                             .WithCustomArgument("-acodec pcm_s16le") // 16-bit PCM
@@ -476,9 +483,9 @@ namespace SharpAI.Services
                     {
                         await fileStream.CopyToAsync(outputStream);
                     }
-                    
+
                     outputStream.Position = 0;
-                    _logger.LogInformation("Successfully converted audio from {InputFileName} to WAV 16kHz mono", inputFileName);
+                    _logger.LogInformation("Successfully converted audio from {InputFileName} to WAV 16kHz mono with silence removed", inputFileName);
                     return outputStream;
                 }
                 finally
@@ -497,7 +504,7 @@ namespace SharpAI.Services
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Failed to convert audio file {InputFileName} to WAV 16kHz", inputFileName);
+                _logger.LogError(ex, "Failed to convert audio file {InputFileName} to WAV 16kHz with silence removal", inputFileName);
                 throw new InvalidOperationException($"Audio conversion failed: {ex.Message}", ex);
             }
         }
@@ -582,13 +589,13 @@ namespace SharpAI.Services
             {
                 // Normalize the sentence for comparison (remove extra spaces, punctuation)
                 var normalizedSentence = NormalizeSentence(sentence);
-                
+
                 // Skip if we've seen this exact sentence recently (within last 3 sentences)
                 if (!recentSentences.Contains(normalizedSentence))
                 {
                     cleanedSentences.Add(sentence);
                     recentSentences.Add(normalizedSentence);
-                    
+
                     // Keep only recent sentences in memory (sliding window of 3)
                     if (recentSentences.Count > 3)
                     {
@@ -640,7 +647,7 @@ namespace SharpAI.Services
             {
                 _logger.LogWarning(ex, "Error during disposal");
             }
-            
+
             base.Dispose();
         }
     }
