@@ -200,11 +200,12 @@ namespace SharpAI.Services
                 builder.WithTemperature(0.6f);
                 builder.WithEntropyThreshold(3.0f);
                 builder.WithLogProbThreshold(-2.0f);
-                builder.WithNoSpeechThreshold(0.6f);
+                builder.WithNoSpeechThreshold(0.7f);
                 builder.WithBeamSearchSamplingStrategy();
 
                 if (internalRequest.TranscriptionRequest.Language == null || internalRequest.TranscriptionRequest.Language.ToLower() == "auto")
                 {
+                    builder.WithLanguage("auto");
                     builder.WithLanguageDetection();
                 }
                 else if (internalRequest.TranscriptionRequest.Language != null)
