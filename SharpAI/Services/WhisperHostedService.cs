@@ -193,8 +193,6 @@ namespace SharpAI.Services
             try
             {
                 var builder = modelInstance.Factory!.CreateBuilder();
-                if(internalRequest.TranscriptionRequest.Language != null)
-                    builder.WithLanguage( internalRequest.TranscriptionRequest.Language);
 
                 if (internalRequest.TranscriptionRequest.Temperature != null)
                     builder.WithTemperature((float)internalRequest.TranscriptionRequest.Temperature);
@@ -204,6 +202,15 @@ namespace SharpAI.Services
                 builder.WithLogProbThreshold(-2.0f);
                 builder.WithNoSpeechThreshold(0.6f);
                 builder.WithBeamSearchSamplingStrategy();
+
+                if (internalRequest.TranscriptionRequest.Language == null || internalRequest.TranscriptionRequest.Language.ToLower() == "auto")
+                {
+                    builder.WithLanguageDetection();
+                }
+                else if (internalRequest.TranscriptionRequest.Language != null)
+                {
+                    builder.WithLanguage(internalRequest.TranscriptionRequest.Language);
+                }
 
                 if (!string.IsNullOrEmpty(internalRequest.TranscriptionRequest.Prompt))
                 {
