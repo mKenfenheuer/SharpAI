@@ -863,19 +863,22 @@ root ::= .*
             var ruleBuilder = new StringBuilder();
             ruleBuilder.Append("\"{\" ");
 
-            if (requiredProps.Any())
+            if (requiredProps.Any() && optionalProps.Any())
             {
+                // Required props + optional props
+                ruleBuilder.Append(string.Join(" \",\" ", requiredProps.Select(k => propKvRuleNames[k])));
+                var optionalRule = string.Join(" | ", optionalProps.Select(k => propKvRuleNames[k]));
+                ruleBuilder.Append($" ( \",\" {optionalRule} ( \",\" {optionalRule} )* )?");
+            }
+            else if (requiredProps.Any())
+            {
+                // Only required props
                 ruleBuilder.Append(string.Join(" \",\" ", requiredProps.Select(k => propKvRuleNames[k])));
             }
-
-            if (optionalProps.Any())
+            else if (optionalProps.Any())
             {
+                // Only optional props
                 var optionalRule = string.Join(" | ", optionalProps.Select(k => propKvRuleNames[k]));
-                if (requiredProps.Any())
-                {
-                    ruleBuilder.Append(" \",\" ");
-                }
-                // Zero or more optional props, comma-separated
                 ruleBuilder.Append($"( {optionalRule} ( \",\" {optionalRule} )* )?");
             }
 
