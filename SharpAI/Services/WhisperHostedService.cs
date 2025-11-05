@@ -206,7 +206,6 @@ namespace SharpAI.Services
                 if (internalRequest.TranscriptionRequest.Language == null || internalRequest.TranscriptionRequest.Language.ToLower() == "auto")
                 {
                     builder.WithLanguage("auto");
-                    builder.WithLanguageDetection();
                 }
                 else if (internalRequest.TranscriptionRequest.Language != null)
                 {
