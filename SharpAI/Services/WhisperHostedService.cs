@@ -14,6 +14,16 @@ using Microsoft.AspNetCore.Hosting;
 namespace SharpAI.Services
 {
     /// <summary>
+    /// Represents an audio segment with start and end timestamps
+    /// </summary>
+    public class AudioSegment
+    {
+        public double StartTime { get; set; }
+        public double EndTime { get; set; }
+        public double Duration => EndTime - StartTime;
+    }
+
+    /// <summary>
     /// Hosted service for audio transcription using Whisper speech recognition models.
     /// Accepts requests asynchronously but processes them sequentially.
     /// Supports multiple response formats, streaming transcription, and audio format conversion.
@@ -194,13 +204,14 @@ namespace SharpAI.Services
             {
                 var builder = modelInstance.Factory!.CreateBuilder();
 
-                if (internalRequest.TranscriptionRequest.Temperature != null)
-                    builder.WithTemperature((float)internalRequest.TranscriptionRequest.Temperature);
+                // Optimize Whisper parameters for better accuracy and reduced hallucinations
+                var temperature = internalRequest.TranscriptionRequest.Temperature ?? 0.1; // Lower default temperature
+                builder.WithTemperature((float)Math.Min(temperature, 0.3)); // Even stricter cap
                 
-                builder.WithTemperature(0.6f);
-                builder.WithEntropyThreshold(3.0f);
-                builder.WithLogProbThreshold(-2.0f);
-                builder.WithNoSpeechThreshold(0.7f);
+                // Very strict parameters to eliminate hallucinations
+                builder.WithEntropyThreshold(2.8f);        // Even higher entropy threshold
+                builder.WithLogProbThreshold(-0.8f);       // Much more selective
+                builder.WithNoSpeechThreshold(0.7f);       // Higher no-speech threshold
                 builder.WithBeamSearchSamplingStrategy();
 
                 if (internalRequest.TranscriptionRequest.Language == null || internalRequest.TranscriptionRequest.Language.ToLower() == "auto")
@@ -229,78 +240,8 @@ namespace SharpAI.Services
                 }
                 else
                 {
-                    // For non-streaming, collect all results
-                    var segments = new List<TranscriptionSegment>();
-                    var words = new List<TranscriptionWord>();
-                    var fullText = new StringBuilder();
-
-                    var segmentId = 0;
-                    await foreach (var result in processor.ProcessAsync(internalRequest.AudioStream))
-                    {
-                        fullText.Append(result.Text);
-
-                        var segment = new TranscriptionSegment
-                        {
-                            Id = segmentId++,
-                            Start = result.Start.TotalMilliseconds,
-                            End = result.End.TotalMilliseconds,
-                            Text = result.Text,
-                            Temperature = 0.2,
-                            AvgLogprob = -0.5,
-                            CompressionRatio = 2.4,
-                            NoSpeechProb = 0.1,
-                            Seek = 0,
-                            Tokens = null
-                        };
-
-                        segments.Add(segment);
-
-                        // Extract words if word-level timestamps are requested
-                        if (internalRequest.TranscriptionRequest.TimestampGranularities?.Contains(TimestampGranularity.Word) == true)
-                        {
-                            var wordsInSegment = result.Text.Split(' ', StringSplitOptions.RemoveEmptyEntries);
-                            var wordDurationMs = (result.End - result.Start).TotalMilliseconds / wordsInSegment.Length;
-
-                            for (int i = 0; i < wordsInSegment.Length; i++)
-                            {
-                                words.Add(new TranscriptionWord
-                                {
-                                    Word = wordsInSegment[i],
-                                    Start = result.Start.TotalMilliseconds + (i * wordDurationMs),
-                                    End = result.Start.TotalMilliseconds + ((i + 1) * wordDurationMs)
-                                });
-                            }
-                        }
-                    }
-
-                    var finalText = fullText.ToString().Trim();
-
-                    // Clean up repetitive patterns in the transcribed text
-                    finalText = CleanRepetitiveText(finalText);
-
-                    var response = new AudioTranscriptionResponse
-                    {
-                        Text = finalText,
-                        Task = "transcribe",
-                        Language = internalRequest.TranscriptionRequest.Language ?? "auto",
-                        Duration = (segments.LastOrDefault()?.End ?? 0.0) / 1000.0,
-                        Segments = segments
-                    };
-
-                    // Include segments and words based on response format
-                    if (internalRequest.TranscriptionRequest.ResponseFormat == AudioResponseFormat.VerboseJson)
-                    {
-                        response.Segments = segments;
-                        if (internalRequest.TranscriptionRequest.TimestampGranularities?.Contains(TimestampGranularity.Word) == true)
-                        {
-                            response.Words = words;
-                        }
-                    }
-
-                    return new WhisperInternalResponse
-                    {
-                        TranscriptionResponse = response
-                    };
+                    // For non-streaming, process audio segments separately
+                    return await ProcessSegmentBasedTranscriptionAsync(processor, internalRequest);
                 }
             }
             catch (Exception ex)
@@ -310,6 +251,290 @@ namespace SharpAI.Services
                 {
                     Error = ex
                 };
+            }
+        }
+
+        /// <summary>
+        /// Processes transcription using segment-based approach with silence detection
+        /// </summary>
+        private async Task<WhisperInternalResponse> ProcessSegmentBasedTranscriptionAsync(
+            WhisperProcessor processor, 
+            WhisperInternalRequest internalRequest)
+        {
+            var tempWavFile = Path.GetTempFileName() + ".wav";
+            
+            try
+            {
+                // Save the audio stream to a temporary WAV file for analysis
+                using (var fileStream = File.Create(tempWavFile))
+                {
+                    internalRequest.AudioStream.Position = 0;
+                    await internalRequest.AudioStream.CopyToAsync(fileStream);
+                }
+
+                // Detect audio segments with speech content
+                var audioSegments = await DetectAudioSegmentsAsync(tempWavFile);
+                _logger.LogInformation("Found {SegmentCount} audio segments to transcribe", audioSegments.Count);
+
+                var transcriptionSegments = new List<TranscriptionSegment>();
+                var words = new List<TranscriptionWord>();
+                var fullText = new StringBuilder();
+                var segmentId = 0;
+                var seenTexts = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+                // Process each audio segment separately
+                foreach (var audioSegment in audioSegments)
+                {
+                    try
+                    {
+                        // Extract the audio segment to a temporary file
+                        var segmentFile = await ExtractAudioSegmentAsync(tempWavFile, audioSegment);
+                        
+                        // Validate audio quality before transcription
+                        if (!await HasSufficientAudioEnergyAsync(segmentFile))
+                        {
+                            _logger.LogDebug("Skipping segment {Start}-{End}: insufficient audio energy", 
+                                audioSegment.StartTime, audioSegment.EndTime);
+                            try { File.Delete(segmentFile); } catch { }
+                            continue;
+                        }
+                        
+                        using var segmentStream = File.OpenRead(segmentFile);
+                        
+                        // Collect all results from this segment first
+                        var segmentResults = new List<(Whisper.net.SegmentData result, double adjustedStart, double adjustedEnd)>();
+                        
+                        await foreach (var result in processor.ProcessAsync(segmentStream))
+                        {
+                            if (string.IsNullOrWhiteSpace(result.Text)) continue;
+                            
+                            // Skip very short transcriptions (likely hallucinations)
+                            if (result.Text.Trim().Length < 3) continue;
+                            
+                            // Adjust timestamps to match original audio timing
+                            var adjustedStart = audioSegment.StartTime + result.Start.TotalSeconds;
+                            var adjustedEnd = audioSegment.StartTime + result.End.TotalSeconds;
+                            
+                            segmentResults.Add((result, adjustedStart, adjustedEnd));
+                        }
+                        
+                        // Filter and validate segment results
+                        foreach (var (result, adjustedStart, adjustedEnd) in segmentResults)
+                        {
+                            var cleanText = result.Text.Trim();
+                            var normalizedText = NormalizeSentence(cleanText);
+                            
+                            // Enhanced hallucination detection
+                            if (IsLikelyHallucination(cleanText))
+                            {
+                                _logger.LogDebug("Skipping likely hallucination: {Text}", cleanText);
+                                continue;
+                            }
+                            
+                            // Skip if we've seen this exact text before (repetition detection)
+                            if (seenTexts.Contains(normalizedText))
+                            {
+                                _logger.LogDebug("Skipping repeated text: {Text}", cleanText);
+                                continue;
+                            }
+                            
+                            // Add to seen texts
+                            seenTexts.Add(normalizedText);
+                            
+                            // Add to full text only if it's not repetitive
+                            fullText.Append(cleanText + " ");
+
+                            var segment = new TranscriptionSegment
+                            {
+                                Id = segmentId++,
+                                Start = adjustedStart * 1000, // Convert to milliseconds
+                                End = adjustedEnd * 1000, // Convert to milliseconds
+                                Text = cleanText,
+                                Temperature = 0.2,
+                                AvgLogprob = -0.5,
+                                CompressionRatio = 2.4,
+                                NoSpeechProb = 0.1,
+                                Seek = 0,
+                                Tokens = null
+                            };
+
+                            transcriptionSegments.Add(segment);
+
+                            // Extract words if word-level timestamps are requested
+                            if (internalRequest.TranscriptionRequest.TimestampGranularities?.Contains(TimestampGranularity.Word) == true)
+                            {
+                                var wordsInSegment = cleanText.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+                                var wordDurationSeconds = result.End.TotalSeconds - result.Start.TotalSeconds;
+                                var wordDurationPerWord = wordDurationSeconds / wordsInSegment.Length;
+
+                                for (int i = 0; i < wordsInSegment.Length; i++)
+                                {
+                                    var wordStart = adjustedStart + (i * wordDurationPerWord);
+                                    var wordEnd = adjustedStart + ((i + 1) * wordDurationPerWord);
+                                    
+                                    words.Add(new TranscriptionWord
+                                    {
+                                        Word = wordsInSegment[i],
+                                        Start = wordStart * 1000, // Convert to milliseconds
+                                        End = wordEnd * 1000 // Convert to milliseconds
+                                    });
+                                }
+                            }
+                        }
+
+                        // Clean up segment file
+                        try { File.Delete(segmentFile); } catch { }
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogWarning(ex, "Failed to transcribe audio segment {Start}-{End}", 
+                            audioSegment.StartTime, audioSegment.EndTime);
+                    }
+                }
+
+                // Build final text from the filtered segments to ensure consistency
+                var finalText = string.Join(" ", transcriptionSegments.Select(s => s.Text)).Trim();
+                
+                // Apply final cleanup to remove any remaining repetitive patterns
+                finalText = CleanRepetitiveText(finalText);
+
+                _logger.LogInformation("Transcribed {SegmentCount} segments with {TextLength} characters", 
+                    transcriptionSegments.Count, finalText.Length);
+
+                // Get total duration from the audio segments
+                var totalDuration = audioSegments.Any() ? audioSegments.Max(s => s.EndTime) : 0.0;
+
+                var response = new AudioTranscriptionResponse
+                {
+                    Text = finalText,
+                    Task = "transcribe",
+                    Language = internalRequest.TranscriptionRequest.Language ?? "auto",
+                    Duration = totalDuration,
+                    Segments = transcriptionSegments
+                };
+
+                // Include segments and words based on response format
+                if (internalRequest.TranscriptionRequest.ResponseFormat == AudioResponseFormat.VerboseJson)
+                {
+                    response.Segments = transcriptionSegments;
+                    if (internalRequest.TranscriptionRequest.TimestampGranularities?.Contains(TimestampGranularity.Word) == true)
+                    {
+                        response.Words = words;
+                    }
+                }
+
+                return new WhisperInternalResponse
+                {
+                    TranscriptionResponse = response
+                };
+            }
+            finally
+            {
+                // Clean up temporary file
+                try { if (File.Exists(tempWavFile)) File.Delete(tempWavFile); } catch { }
+            }
+        }
+
+        /// <summary>
+        /// Extracts a specific time segment from an audio file with audio enhancement
+        /// </summary>
+        private async Task<string> ExtractAudioSegmentAsync(string sourceFile, AudioSegment segment)
+        {
+            var outputFile = Path.GetTempFileName() + ".wav";
+            
+            try
+            {
+                // Add small padding to segment boundaries and apply audio enhancement
+                var startTime = Math.Max(segment.StartTime - 0.2, 0); // Smaller padding to avoid silence
+                var duration = segment.Duration + 0.4; // Minimal padding
+                
+                await FFMpegArguments
+                    .FromFileInput(sourceFile)
+                    .OutputToFile(outputFile, true, options => options
+                        .Seek(TimeSpan.FromSeconds(startTime))
+                        .WithDuration(TimeSpan.FromSeconds(duration))
+                        .WithCustomArgument("-ar 16000") // 16kHz sample rate
+                        .WithCustomArgument("-ac 1") // Mono
+                        .WithCustomArgument("-acodec pcm_s16le") // 16-bit PCM
+                        .WithCustomArgument("-af highpass=f=80,lowpass=f=8000,volume=1.2") // Basic audio enhancement
+                        .ForceFormat("wav"))
+                    .ProcessAsynchronously();
+                
+                return outputFile;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Failed to extract audio segment {Start}-{End}", 
+                    segment.StartTime, segment.EndTime);
+                throw;
+            }
+        }
+
+        /// <summary>
+        /// Validates if an audio segment has sufficient energy to contain meaningful speech
+        /// </summary>
+        /// <param name="audioFilePath">Path to the audio file to analyze</param>
+        /// <returns>True if the audio has sufficient energy, false otherwise</returns>
+        private async Task<bool> HasSufficientAudioEnergyAsync(string audioFilePath)
+        {
+            try
+            {
+                // Use ffmpeg to analyze audio levels
+                var processInfo = new System.Diagnostics.ProcessStartInfo
+                {
+                    FileName = "ffmpeg",
+                    Arguments = $"-i \"{audioFilePath}\" -af volumedetect -f null -",
+                    RedirectStandardError = true,
+                    UseShellExecute = false,
+                    CreateNoWindow = true
+                };
+
+                using var process = System.Diagnostics.Process.Start(processInfo);
+                var stderr = await process.StandardError.ReadToEndAsync();
+                await process.WaitForExitAsync();
+
+                // Parse the volume detection output
+                // Look for mean_volume and max_volume
+                var lines = stderr.Split('\n');
+                double meanVolume = -100; // Default to very low
+                double maxVolume = -100;
+
+                foreach (var line in lines)
+                {
+                    if (line.Contains("mean_volume:"))
+                    {
+                        var parts = line.Split("mean_volume:");
+                        if (parts.Length > 1 && double.TryParse(parts[1].Trim().Split(' ')[0], out double mean))
+                        {
+                            meanVolume = mean;
+                        }
+                    }
+                    else if (line.Contains("max_volume:"))
+                    {
+                        var parts = line.Split("max_volume:");
+                        if (parts.Length > 1 && double.TryParse(parts[1].Trim().Split(' ')[0], out double max))
+                        {
+                            maxVolume = max;
+                        }
+                    }
+                }
+
+                // Reject segments that are too quiet
+                // Mean volume should be above -40dB and max volume above -20dB for meaningful speech
+                var hasSufficientEnergy = meanVolume > -40.0 && maxVolume > -20.0;
+                
+                if (!hasSufficientEnergy)
+                {
+                    _logger.LogDebug("Audio segment rejected: mean_volume={MeanVolume}dB, max_volume={MaxVolume}dB", 
+                        meanVolume, maxVolume);
+                }
+
+                return hasSufficientEnergy;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to analyze audio energy, assuming sufficient");
+                return true; // Default to processing if analysis fails
             }
         }
 
@@ -518,6 +743,195 @@ namespace SharpAI.Services
         }
 
         /// <summary>
+        /// Detects audio segments with speech by analyzing the WAV file for silence.
+        /// Returns a list of time segments that contain audio content.
+        /// </summary>
+        /// <param name="wavFilePath">Path to the WAV file to analyze</param>
+        /// <returns>List of audio segments with speech content</returns>
+        private async Task<List<AudioSegment>> DetectAudioSegmentsAsync(string wavFilePath)
+        {
+            var segments = new List<AudioSegment>();
+            var tempOutputFile = Path.GetTempFileName();
+
+            try
+            {
+                // Use ffmpeg silencedetect filter to detect silence periods
+                // Very aggressive silence detection: -35dB threshold, 1.5 seconds minimum silence
+                var processInfo = new System.Diagnostics.ProcessStartInfo
+                {
+                    FileName = "ffmpeg",
+                    Arguments = $"-i \"{wavFilePath}\" -af silencedetect=noise=-40dB:duration=1.5 -f null -",
+                    RedirectStandardError = true,
+                    UseShellExecute = false,
+                    CreateNoWindow = true
+                };
+
+                using var process = System.Diagnostics.Process.Start(processInfo);
+                var stderr = await process.StandardError.ReadToEndAsync();
+                await process.WaitForExitAsync();
+
+                // Parse the silence detection output
+                segments = ParseSilenceDetectionOutput(stderr, wavFilePath);
+                
+                // Filter segments: minimum 2 seconds duration to avoid short segments that cause hallucinations
+                segments = segments.Where(s => s.Duration >= 2).ToList();
+                
+                _logger.LogInformation("Detected {SegmentCount} audio segments in file (after filtering)", segments.Count);
+                return segments;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Failed to detect audio segments");
+                // Fallback: return the entire audio duration as one segment
+                var audioDuration = await GetAudioDurationAsync(wavFilePath);
+                return new List<AudioSegment> 
+                { 
+                    new AudioSegment { StartTime = 0, EndTime = audioDuration } 
+                };
+            }
+            finally
+            {
+                try
+                {
+                    if (File.Exists(tempOutputFile)) File.Delete(tempOutputFile);
+                }
+                catch { }
+            }
+        }
+
+        /// <summary>
+        /// Parses the output from ffmpeg silencedetect filter to extract audio segments
+        /// </summary>
+        private List<AudioSegment> ParseSilenceDetectionOutput(string ffmpegOutput, string wavFilePath)
+        {
+            var segments = new List<AudioSegment>();
+            var lines = ffmpegOutput.Split('\n');
+            
+            var silenceStarts = new List<double>();
+            var silenceEnds = new List<double>();
+            double totalDuration = 0;
+
+            // Parse silence start and end times
+            foreach (var line in lines)
+            {
+                if (line.Contains("silence_start:"))
+                {
+                    var parts = line.Split("silence_start:");
+                    if (parts.Length > 1 && double.TryParse(parts[1].Trim().Split(' ')[0], out double start))
+                    {
+                        silenceStarts.Add(start);
+                    }
+                }
+                else if (line.Contains("silence_end:"))
+                {
+                    var parts = line.Split("silence_end:");
+                    if (parts.Length > 1 && double.TryParse(parts[1].Trim().Split(' ')[0], out double end))
+                    {
+                        silenceEnds.Add(end);
+                    }
+                }
+                else if (line.Contains("Duration:"))
+                {
+                    // Try to extract total duration from format: Duration: 00:00:10.23
+                    var match = System.Text.RegularExpressions.Regex.Match(line, @"Duration: (\d{2}):(\d{2}):(\d{2})\.(\d{2})");
+                    if (match.Success)
+                    {
+                        var hours = int.Parse(match.Groups[1].Value);
+                        var minutes = int.Parse(match.Groups[2].Value);
+                        var seconds = int.Parse(match.Groups[3].Value);
+                        var centiseconds = int.Parse(match.Groups[4].Value);
+                        totalDuration = hours * 3600 + minutes * 60 + seconds + centiseconds / 100.0;
+                    }
+                }
+            }
+
+            // If we couldn't get duration from parsing, get it directly
+            if (totalDuration == 0)
+            {
+                totalDuration = GetAudioDurationAsync(wavFilePath).Result;
+            }
+
+            // Create audio segments based on silence periods
+            if (silenceStarts.Count == 0 && silenceEnds.Count == 0)
+            {
+                // No silence detected, entire file is one segment
+                segments.Add(new AudioSegment { StartTime = 0, EndTime = totalDuration });
+            }
+            else
+            {
+                double currentStart = 0;
+
+                // Combine silence starts and ends to create audio segments
+                var allSilenceEvents = new List<(double time, bool isStart)>();
+                silenceStarts.ForEach(s => allSilenceEvents.Add((s, true)));
+                silenceEnds.ForEach(e => allSilenceEvents.Add((e, false)));
+                allSilenceEvents = allSilenceEvents.OrderBy(e => e.time).ToList();
+
+                foreach (var (time, isStart) in allSilenceEvents)
+                {
+                    if (isStart && currentStart < time)
+                    {
+                        // Found start of silence, add audio segment before it
+                        segments.Add(new AudioSegment { StartTime = currentStart, EndTime = time });
+                    }
+                    else if (!isStart)
+                    {
+                        // Found end of silence, update current start
+                        currentStart = time;
+                    }
+                }
+
+                // Add final segment if there's audio after the last silence
+                if (currentStart < totalDuration)
+                {
+                    segments.Add(new AudioSegment { StartTime = currentStart, EndTime = totalDuration });
+                }
+            }
+
+            // Filter out very short segments and merge nearby segments
+            segments = segments.Where(s => s.Duration >= 1.0).ToList();
+            
+            // Merge segments that are very close together (less than 3 seconds apart)
+            var mergedSegments = new List<AudioSegment>();
+            for (int i = 0; i < segments.Count; i++)
+            {
+                var current = segments[i];
+                
+                // Look ahead to see if we can merge with next segments
+                while (i + 1 < segments.Count && segments[i + 1].StartTime - current.EndTime < 3.0)
+                {
+                    current = new AudioSegment 
+                    { 
+                        StartTime = current.StartTime, 
+                        EndTime = segments[i + 1].EndTime 
+                    };
+                    i++;
+                }
+                
+                mergedSegments.Add(current);
+            }
+
+            return mergedSegments;
+        }
+
+        /// <summary>
+        /// Gets the duration of an audio file
+        /// </summary>
+        private async Task<double> GetAudioDurationAsync(string filePath)
+        {
+            try
+            {
+                var mediaInfo = await FFProbe.AnalyseAsync(filePath);
+                return mediaInfo.Duration.TotalSeconds;
+            }
+            catch
+            {
+                // Fallback: assume reasonable default
+                return 30.0;
+            }
+        }
+
+        /// <summary>
         /// Formats subtitle timestamps for SRT format.
         /// </summary>
         /// <param name="segments">Transcription segments to format</param>
@@ -642,6 +1056,91 @@ namespace SharpAI.Services
 
             // Normalize multiple spaces to single spaces
             return System.Text.RegularExpressions.Regex.Replace(normalized, @"\s+", " ").Trim();
+        }
+
+        /// <summary>
+        /// Detects if a transcribed text is likely a hallucination based on common patterns
+        /// </summary>
+        /// <param name="text">Text to analyze</param>
+        /// <returns>True if the text appears to be a hallucination</returns>
+        private bool IsLikelyHallucination(string text)
+        {
+            if (string.IsNullOrWhiteSpace(text))
+                return true;
+
+            var cleanText = text.Trim().ToLowerInvariant();
+            
+            // Check for very short fragments that are likely hallucinations
+            if (cleanText.Length < 4)
+                return true;
+
+            // Common hallucination patterns in Whisper
+            var hallucinationPatterns = new[]
+            {
+                // Common filler phrases
+                "thank you", "thanks", "bye", "goodbye", "have a nice day", "have a good day",
+                "see you", "see you later", "take care", "you're welcome", "welcome",
+                
+                // Music/noise interpretations
+                "music", "applause", "clapping", "noise", "static", "beep", "beeping",
+                "[music]", "[applause]", "[noise]", "[static]", "[beep]", "(music)", "(applause)",
+                
+                // Common misinterpretations of silence
+                "hmm", "mm", "mm-hmm", "uh", "ah", "eh", "oh", "okay", "ok", "right", "yes", "yeah", "yep",
+                
+                // Subtitle artifacts
+                "subtitles", "captions", "transcript", "transcription", "closed captions",
+                "www.", ".com", ".org", ".net", "http", "https",
+                
+                // Language indicators (common hallucinations)
+                "english", "spanish", "french", "german", "chinese", "japanese", "korean",
+                
+                // Common artifacts
+                "...", ".", "..", "....", ".....", 
+                "the", "a", "an", "and", "or", "but", "in", "on", "at", "to", "for", "of", "with", "by"
+            };
+
+            // Check if the entire text matches a hallucination pattern
+            if (hallucinationPatterns.Contains(cleanText))
+                return true;
+
+            // Check for single repeated characters (e.g., "aaaa", "mmmm")
+            if (cleanText.Length >= 3 && cleanText.All(c => c == cleanText[0]))
+                return true;
+
+            // Check for very repetitive short patterns
+            if (cleanText.Length <= 10 && IsVeryRepetitive(cleanText))
+                return true;
+
+            // Check for non-speech sounds transcribed as text
+            if (System.Text.RegularExpressions.Regex.IsMatch(cleanText, @"^[^a-z]*$") && cleanText.Length < 10)
+                return true;
+
+            // Check for excessive punctuation or special characters
+            var letterCount = cleanText.Count(char.IsLetter);
+            if (letterCount == 0 || (double)letterCount / cleanText.Length < 0.5)
+                return true;
+
+            return false;
+        }
+
+        /// <summary>
+        /// Checks if a short text is very repetitive (indicating hallucination)
+        /// </summary>
+        private bool IsVeryRepetitive(string text)
+        {
+            if (text.Length < 4) return false;
+
+            // Check for repeated substrings
+            for (int len = 1; len <= text.Length / 2; len++)
+            {
+                var substring = text.Substring(0, len);
+                var repeated = string.Concat(Enumerable.Repeat(substring, text.Length / len));
+                if (repeated == text.Substring(0, repeated.Length))
+                    return true;
+            }
+            
+            return false;
         }
 
         public override void Dispose()
