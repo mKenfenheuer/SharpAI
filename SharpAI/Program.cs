@@ -55,10 +55,16 @@ public class Program
         // Configure form options for large file uploads
         builder.Services.Configure<FormOptions>(options =>
         {
-            options.MultipartBodyLengthLimit = 100_000_000; // 100MB
+            options.MultipartBodyLengthLimit = 1024L * 1024L * 1024L * 10; // 10 GB
             options.ValueLengthLimit = int.MaxValue;
             options.ValueCountLimit = int.MaxValue;
             options.KeyLengthLimit = int.MaxValue;
+        });
+
+        // Allow large multipart form uploads (e.g., up to 10 GB)
+        builder.WebHost.ConfigureKestrel(serverOptions =>
+        {
+            serverOptions.Limits.MaxRequestBodySize = 1024L * 1024L * 1024L * 10L; // 10 GB
         });
 
         // Learn more about configuring OpenAPI at https://aka.ms/aspnet/openapi

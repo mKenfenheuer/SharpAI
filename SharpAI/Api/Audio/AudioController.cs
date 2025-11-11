@@ -22,8 +22,6 @@ public class AudioController : ControllerBase
     }
 
     [HttpPost("transcriptions")]
-    [RequestSizeLimit(100_000_000)] // 100MB limit for audio files
-    [DisableRequestSizeLimit]
     public async Task<IActionResult> CreateTranscription([FromForm] AudioTranscriptionFormRequest formRequest)
     {
         var requestId = Guid.NewGuid().ToString("N");
@@ -204,8 +202,6 @@ public class AudioController : ControllerBase
     }
 
     [HttpPost("translations")]
-    [RequestSizeLimit(100_000_000)] // 100MB limit for audio files
-    [DisableRequestSizeLimit]
     public async Task<IActionResult> CreateTranslation([FromForm] AudioTranscriptionFormRequest formRequest)
     {
         var requestId = Guid.NewGuid().ToString("N");
