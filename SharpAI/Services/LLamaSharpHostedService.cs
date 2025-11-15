@@ -67,7 +67,7 @@ namespace SharpAI.Services
             try
             {
                 // Warm up the model with a test request if we are in production
-                if (_environment.IsProduction())
+                if (_environment.IsProduction() && false) // Disabled warmup for now
                 {
                     await WarmUpModel();
                 }

@@ -445,7 +445,7 @@ root ::= .*
         /// </summary>
         private string GenerateConstantRule(JsonElement value)
         {
-            return FormatLiteral(JsonSerializer.Serialize(value));
+            return JsonSerializer.Serialize(value);
         }
 
         /// <summary>

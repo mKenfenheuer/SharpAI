@@ -285,9 +285,9 @@ namespace SharpAI.Services
                     {
                         Name = "gpt-oss-120b",
                         HuggingFaceId = "ggml-org/gpt-oss-120b-GGUF", 
-                        Filename = "gpt-oss-120b-mxfp4.gguf",
+                        Filename = "gpt-oss-120b-mxfp4-00001-of-00003.gguf",
                         ContextSize = 32768,
-                        GpuLayers = 99999,
+                        GpuLayers = 6,
                         Description = "GPT-OSS 120B reasoning model with harmony format - large variant",
                         SizeGB = 72.5
                     }
