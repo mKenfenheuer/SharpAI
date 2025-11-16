@@ -57,6 +57,10 @@ public class AudioController : ControllerBase
             // Validate file type
             var allowedTypes = new[] { "audio/mpeg", "audio/wave", "audio/mp4", "audio/wav", "audio/webm", "audio/m4a", "audio/ogg", "audio/flac", "audio/mp3" };
             var contentType = formRequest.File.ContentType?.ToLower() ?? GetContentTypeFromFilename(formRequest.File.FileName);
+            if(string.IsNullOrEmpty(contentType))
+            {
+                contentType = GetContentTypeFromFilename(formRequest.File.FileName);
+            }
             if (!allowedTypes.Contains(contentType))
             {
                 await _requestLogger.LogErrorAsync(requestId, $"Invalid audio file type: {contentType}");
