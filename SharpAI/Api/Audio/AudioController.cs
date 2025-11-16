@@ -55,12 +55,12 @@ public class AudioController : ControllerBase
             }
 
             // Validate file type
-            var allowedTypes = new[] { "audio/mpeg", "audio/wave", "audio/mp4", "audio/wav", "audio/webm", "audio/m4a", "audio/ogg", "audio/flac" };
+            var allowedTypes = new[] { "audio/mpeg", "audio/wave", "audio/mp4", "audio/wav", "audio/webm", "audio/m4a", "audio/ogg", "audio/flac", "audio/mp3" };
             var contentType = formRequest.File.ContentType?.ToLower() ?? GetContentTypeFromFilename(formRequest.File.FileName);
             if (!allowedTypes.Contains(contentType))
             {
-                await _requestLogger.LogErrorAsync(requestId, $"Invalid audio file type: {formRequest.File.ContentType}");
-                return BadRequest(new { error = new { message = "Invalid audio file type", type = "invalid_request_error" } });
+                await _requestLogger.LogErrorAsync(requestId, $"Invalid audio file type: {contentType}");
+                return BadRequest(new { error = new { message = $"Invalid audio file type: {contentType}", type = "invalid_request_error" } });
             }
 
             _logger.LogInformation("[{RequestId}] Processing audio transcription for file: {FileName} ({Size} bytes)",
