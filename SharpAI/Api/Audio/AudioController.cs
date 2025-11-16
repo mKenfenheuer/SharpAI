@@ -56,7 +56,8 @@ public class AudioController : ControllerBase
 
             // Validate file type
             var allowedTypes = new[] { "audio/mpeg", "audio/wave", "audio/mp4", "audio/wav", "audio/webm", "audio/m4a", "audio/ogg", "audio/flac" };
-            if (!allowedTypes.Contains(formRequest.File.ContentType?.ToLower()))
+            var contentType = formRequest.File.ContentType?.ToLower() ?? GetContentTypeFromFilename(formRequest.File.FileName);
+            if (!allowedTypes.Contains(contentType))
             {
                 await _requestLogger.LogErrorAsync(requestId, $"Invalid audio file type: {formRequest.File.ContentType}");
                 return BadRequest(new { error = new { message = "Invalid audio file type", type = "invalid_request_error" } });
@@ -93,6 +94,22 @@ public class AudioController : ControllerBase
             await _requestLogger.LogErrorAsync(requestId, ex.Message, ex.StackTrace);
             return StatusCode(500, new { requestId = requestId, error = new { message = ex.Message, type = ex.GetType().Name } });
         }
+    }
+
+    private string GetContentTypeFromFilename(string fileName)
+    {
+        var extension = Path.GetExtension(fileName).ToLower();
+        return extension switch
+        {
+            ".mp3" => "audio/mpeg",
+            ".wav" => "audio/wave",
+            ".mp4" => "audio/mp4",
+            ".m4a" => "audio/m4a",
+            ".webm" => "audio/webm",
+            ".ogg" => "audio/ogg",
+            ".flac" => "audio/flac",
+            _ => "application/octet-stream",
+        };
     }
 
     private async Task<IActionResult> HandleTranscription(AudioTranscriptionRequest request, string requestId)
