@@ -18,8 +18,8 @@ COPY . .
 WORKDIR "/src/SharpAI"
 
 RUN dotnet remove package Whisper.net.Runtime
-RUN dotnet add package Whisper.net.Runtime.Cuda
-RUN dotnet add package Whisper.net.Runtime.Cuda.Linux
+RUN dotnet add package Whisper.net.Runtime.Cuda -v 1.8.1
+RUN dotnet add package Whisper.net.Runtime.Cuda.Linux -v 1.8.1
 RUN dotnet restore "SharpAI.csproj"
 RUN dotnet build "SharpAI.csproj" -c Release -o /app/build
 
