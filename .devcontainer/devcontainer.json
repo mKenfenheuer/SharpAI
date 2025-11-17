@@ -1,6 +1,12 @@
 {
   "build": { "dockerfile": "Dockerfile" },
-
+  "mounts": [
+    {
+      "source": "/ssd/docker/data/sharpai",
+      "target": "/workspaces/sharpai/SharpAI/Data",
+      "type": "bind"
+    }
+  ],
   "customizations": {
     "vscode": {
       "extensions": ["ms-dotnettools.csdevkit"]
