@@ -72,17 +72,17 @@ namespace SharpAI.Api.Chat
         public async Task<IActionResult> CreateChatCompletion([FromBody] ChatCompletionRequest request)
         {
             var requestId = Guid.NewGuid().ToString("N");
-            
+
             try
             {
-                _logger.LogInformation("[{RequestId}] Received chat completion request for model: {Model}, Stream: {Stream}", 
+                _logger.LogInformation("[{RequestId}] Received chat completion request for model: {Model}, Stream: {Stream}",
                     requestId, request.Model, request.Stream);
-                _logger.LogDebug("[{RequestId}] Request details: {Request}", 
+                _logger.LogDebug("[{RequestId}] Request details: {Request}",
                     requestId, JsonSerializer.Serialize(request));
-                
+
                 // Log request to JSONL file
                 await _requestLogger.LogRequestAsync(requestId, request);
-                
+
                 // Validate request with detailed error reporting
                 var validationError = ValidateRequest(request);
                 if (validationError != null)
@@ -118,10 +118,10 @@ namespace SharpAI.Api.Chat
         private async Task<IActionResult> HandleNonStreamingResponse(ChatCompletionRequest request, string requestId)
         {
             _logger.LogInformation("[{RequestId}] Processing non-streaming request", requestId);
-            
+
             CancellationTokenSource cts = new CancellationTokenSource();
             Request.HttpContext.RequestAborted.Register(() => cts.Cancel());
-                
+
             ChatCompletionResponse? response = null;
 
             await foreach (var result in _llamaService.GenerateChatCompletionAsync(request, requestId, cts.Token))
@@ -133,7 +133,7 @@ namespace SharpAI.Api.Chat
             _logger.LogInformation("[{RequestId}] Completed non-streaming request", requestId);
             _logger.LogDebug("[{RequestId}] Final response: {Response}", requestId, JsonSerializer.Serialize(response));
             await _requestLogger.LogFinalResponseAsync(requestId, response);
-            
+
             // For non-streaming responses, the channel handling is already done in ToChatMessages
             // The final response will have content in the appropriate fields (Content vs Reasoning)
             return Ok(response);
@@ -148,7 +148,7 @@ namespace SharpAI.Api.Chat
         private async Task<IActionResult> HandleStreamingResponse(ChatCompletionRequest request, string requestId)
         {
             _logger.LogInformation("[{RequestId}] Processing streaming request", requestId);
-            
+
             Response.ContentType = "text/event-stream";
             Response.Headers.Add("Cache-Control", "no-cache");
             Response.Headers.Add("Connection", "keep-alive");
@@ -169,7 +169,7 @@ namespace SharpAI.Api.Chat
 
                     // Process the response as a streaming chunk
                     var assistantChoice = chunk.Choices?.FirstOrDefault(c => c.Message?.Role == ChatRole.Assistant);
-                    
+
                     if (assistantChoice?.Message != null)
                     {
                         var delta = new ChatCompletionDelta();
@@ -187,12 +187,12 @@ namespace SharpAI.Api.Chat
                             delta.Content = assistantChoice.Message.Content;
                             completeResponse.Append(assistantChoice.Message.Content);
                         }
-                        
+
                         if (!string.IsNullOrEmpty(assistantChoice.Message.Reasoning))
                         {
                             delta.Reasoning = assistantChoice.Message.Reasoning;
                         }
-                        
+
                         if (!string.IsNullOrEmpty(assistantChoice.Message.Commentary))
                         {
                             delta.Commentary = assistantChoice.Message.Commentary;
@@ -202,7 +202,7 @@ namespace SharpAI.Api.Chat
                         if (assistantChoice.Message.ToolCalls?.Any() == true)
                         {
                             delta.ToolCalls = new List<ToolCallDelta>();
-                            
+
                             for (int i = 0; i < assistantChoice.Message.ToolCalls.Count; i++)
                             {
                                 var toolCall = assistantChoice.Message.ToolCalls[i];
@@ -216,8 +216,8 @@ namespace SharpAI.Api.Chat
                                 {
                                     toolCallDelta.Function = new FunctionCallDelta
                                     {
-                                        Name = toolCall.Function.Namespace != "functions" ? 
-                                            $"{toolCall.Function.Namespace}.{toolCall.Function.Name}" : 
+                                        Name = toolCall.Function.Namespace != "functions" ?
+                                            $"{toolCall.Function.Namespace}.{toolCall.Function.Name}" :
                                             toolCall.Function.Name,
                                         Arguments = toolCall.Function.Arguments
                                     };
@@ -228,7 +228,7 @@ namespace SharpAI.Api.Chat
                         }
 
                         // Create the streaming response only if there's actual content
-                        if (!string.IsNullOrEmpty(delta.Content) || 
+                        if (!string.IsNullOrEmpty(delta.Content) ||
                             !string.IsNullOrEmpty(delta.Reasoning) ||
                             !string.IsNullOrEmpty(delta.Commentary) ||
                             delta.ToolCalls?.Any() == true)
@@ -251,9 +251,12 @@ namespace SharpAI.Api.Chat
                                 Usage = chunk.Usage
                             };
 
-                            var chunkJson = JsonSerializer.Serialize(streamingResponse);
-                            await Response.WriteAsync($"data: {chunkJson}\n\n");
-                            await Response.Body.FlushAsync();
+                            if (chunk.Object != CompletionObjectType.ChatCompletion)
+                            {
+                                var chunkJson = JsonSerializer.Serialize(streamingResponse);
+                                await Response.WriteAsync($"data: {chunkJson}\n\n");
+                                await Response.Body.FlushAsync();
+                            }
                         }
                     }
                 }
@@ -261,20 +264,21 @@ namespace SharpAI.Api.Chat
                 // Send the final [DONE] message to indicate the stream has ended
                 await Response.WriteAsync("data: [DONE]\n\n");
                 await Response.Body.FlushAsync();
-                
+
                 // Log final response
                 _logger.LogInformation("[{RequestId}] Completed streaming request", requestId);
                 _logger.LogDebug("[{RequestId}] Complete streamed response: {Response}", requestId, completeResponse.ToString());
-                await _requestLogger.LogFinalResponseAsync(requestId, new { 
-                    StreamId = streamId, 
-                    CompleteResponse = completeResponse.ToString() 
+                await _requestLogger.LogFinalResponseAsync(requestId, new
+                {
+                    StreamId = streamId,
+                    CompleteResponse = completeResponse.ToString()
                 });
             }
             catch (Exception ex)
             {
                 _logger.LogError(ex, "[{RequestId}] Error during streaming chat completion", requestId);
                 await _requestLogger.LogErrorAsync(requestId, ex.Message, ex.StackTrace);
-                
+
                 var errorResponse = new { requestId = requestId, error = new { message = ex.Message, type = ex.GetType().Name } };
                 var errorJson = JsonSerializer.Serialize(errorResponse);
                 cts.Cancel();
@@ -308,12 +312,12 @@ namespace SharpAI.Api.Chat
             for (int i = 0; i < request.Messages.Count; i++)
             {
                 var message = request.Messages[i];
-                
+
                 // Check if role is valid (we can't directly check for "None" since it doesn't exist)
                 // Instead, check if it's one of the valid values
-                if (message.Role != ChatRole.System && 
-                    message.Role != ChatRole.User && 
-                    message.Role != ChatRole.Assistant && 
+                if (message.Role != ChatRole.System &&
+                    message.Role != ChatRole.User &&
+                    message.Role != ChatRole.Assistant &&
                     message.Role != ChatRole.Tool)
                 {
                     return new ValidationError($"messages[{i}].role", $"Message at index {i} has invalid 'role' field. Must be one of: system, user, assistant, tool");
@@ -324,7 +328,7 @@ namespace SharpAI.Api.Chat
                 {
                     bool hasContent = !string.IsNullOrEmpty(message.Content);
                     bool hasToolCalls = message.ToolCalls != null && message.ToolCalls.Any();
-                    
+
                     if (!hasContent && !hasToolCalls)
                     {
                         return new ValidationError($"messages[{i}].content", $"Message at index {i} must have either 'content' or 'tool_calls'");
@@ -337,7 +341,7 @@ namespace SharpAI.Api.Chat
                     {
                         return new ValidationError($"messages[{i}].tool_call_id", $"Tool message at index {i} must have 'tool_call_id'");
                     }
-                    
+
                     if (string.IsNullOrEmpty(message.Content))
                     {
                         return new ValidationError($"messages[{i}].content", $"Tool message at index {i} must have 'content'");
@@ -350,22 +354,22 @@ namespace SharpAI.Api.Chat
                     for (int j = 0; j < message.ToolCalls.Count; j++)
                     {
                         var toolCall = message.ToolCalls[j];
-                        
+
                         if (string.IsNullOrEmpty(toolCall.CallId))
                         {
                             return new ValidationError($"messages[{i}].tool_calls[{j}].id", $"Tool call at messages[{i}].tool_calls[{j}] must have 'id'");
                         }
-                        
+
                         if (toolCall.Type != ToolType.Function)
                         {
                             return new ValidationError($"messages[{i}].tool_calls[{j}].type", $"Tool call at messages[{i}].tool_calls[{j}] must have 'type' set to 'function'");
                         }
-                        
+
                         if (toolCall.Function == null)
                         {
                             return new ValidationError($"messages[{i}].tool_calls[{j}].function", $"Tool call at messages[{i}].tool_calls[{j}] must have 'function' object");
                         }
-                        
+
                         if (string.IsNullOrEmpty(toolCall.Function.Name))
                         {
                             return new ValidationError($"messages[{i}].tool_calls[{j}].function.name", $"Function at messages[{i}].tool_calls[{j}].function must have 'name'");
@@ -421,17 +425,17 @@ namespace SharpAI.Api.Chat
                 for (int i = 0; i < request.Tools.Count; i++)
                 {
                     var tool = request.Tools[i];
-                    
+
                     if (tool.Type != ToolType.Function)
                     {
                         return new ValidationError($"tools[{i}].type", $"Tool at index {i} must have 'type' set to 'function' (currently the only supported type)");
                     }
-                    
+
                     if (tool.Function == null)
                     {
                         return new ValidationError($"tools[{i}].function", $"Tool at index {i} must have 'function' object");
                     }
-                    
+
                     if (string.IsNullOrEmpty(tool.Function.Name))
                     {
                         return new ValidationError($"tools[{i}].function.name", $"Function at tools[{i}].function must have 'name'");
@@ -442,25 +446,25 @@ namespace SharpAI.Api.Chat
             // Validate response_format
             if (request.ResponseFormat != null)
             {
-                if (request.ResponseFormat.Type != ResponseFormatType.Text && 
-                    request.ResponseFormat.Type != ResponseFormatType.JsonObject && 
+                if (request.ResponseFormat.Type != ResponseFormatType.Text &&
+                    request.ResponseFormat.Type != ResponseFormatType.JsonObject &&
                     request.ResponseFormat.Type != ResponseFormatType.JsonSchema)
                 {
                     return new ValidationError("response_format.type", "'response_format.type' must be one of: text, json_object, json_schema");
                 }
-                
+
                 if (request.ResponseFormat.Type == ResponseFormatType.JsonSchema)
                 {
                     if (request.ResponseFormat.JsonSchema == null)
                     {
                         return new ValidationError("response_format.json_schema", "When 'response_format.type' is 'json_schema', 'json_schema' field is required");
                     }
-                    
+
                     if (string.IsNullOrEmpty(request.ResponseFormat.JsonSchema.Name))
                     {
                         return new ValidationError("response_format.json_schema.name", "'response_format.json_schema.name' is required");
                     }
-                    
+
                     if (request.ResponseFormat.JsonSchema.Schema == null)
                     {
                         return new ValidationError("response_format.json_schema.schema", "'response_format.json_schema.schema' is required and must be a valid JSON schema object");
@@ -469,10 +473,10 @@ namespace SharpAI.Api.Chat
             }
 
             // Validate reasoning_effort
-            if (request.ReasoningEffort.HasValue && 
+            if (request.ReasoningEffort.HasValue &&
                 request.ReasoningEffort.Value != ReasoningEffortLevel.Minimal &&
-                request.ReasoningEffort.Value != ReasoningEffortLevel.Low && 
-                request.ReasoningEffort.Value != ReasoningEffortLevel.Medium && 
+                request.ReasoningEffort.Value != ReasoningEffortLevel.Low &&
+                request.ReasoningEffort.Value != ReasoningEffortLevel.Medium &&
                 request.ReasoningEffort.Value != ReasoningEffortLevel.High)
             {
                 return new ValidationError("reasoning_effort", "'reasoning_effort' must be one of: minimal, low, medium, high");
