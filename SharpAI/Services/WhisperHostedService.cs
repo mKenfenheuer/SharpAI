@@ -761,13 +761,42 @@ namespace SharpAI.Services
         }
 
         /// <summary>
+        /// Determines the audio format from the content type to help FFmpeg detect the format correctly.
+        /// </summary>
+        /// <param name="contentType">The MIME content type (e.g., "audio/mpeg", "audio/mp4")</param>
+        /// <returns>FFmpeg format string or null if not recognized</returns>
+        private string? GetAudioFormatFromContentType(string contentType)
+        {
+            return contentType?.ToLower().Split(';')[0].Trim() switch
+            {
+                "audio/mpeg" => "mp3",
+                "audio/mp3" => "mp3",
+                "audio/wav" => "wav",
+                "audio/wave" => "wav",
+                "audio/x-wav" => "wav",
+                "audio/mp4" => "mp4",
+                "audio/x-m4a" => "aac",
+                "audio/m4a" => "aac",
+                "audio/aac" => "aac",
+                "audio/webm" => "webm",
+                "audio/ogg" => "ogg",
+                "audio/flac" => "flac",
+                "audio/x-flac" => "flac",
+                "audio/wma" => "wma",
+                "audio/x-ms-wma" => "wma",
+                "audio/opus" => "opus",
+                _ => null,
+            };
+        }
+
+        /// <summary>
         /// Converts any audio format to WAV 16kHz mono format suitable for Whisper processing.
         /// Removes silent audio segments to prevent model repetition issues.
         /// </summary>
         /// <param name="inputAudioStream">Input audio stream in any format</param>
-        /// <param name="inputFileName">Original filename to help determine format</param>
+        /// <param name="contentType">Content type of the audio (e.g., "audio/mpeg")</param>
         /// <returns>Stream containing WAV 16kHz mono audio with silence removed</returns>
-        public async Task<Stream> ConvertToWav16kHzAsync(Stream inputAudioStream, string inputFileName)
+        public async Task<Stream> ConvertToWav16kHzAsync(Stream inputAudioStream, string contentType)
         {
             try
             {
@@ -783,9 +812,21 @@ namespace SharpAI.Services
                         await inputAudioStream.CopyToAsync(fileStream);
                     }
 
+                    // Detect input format from file extension
+                    var inputFormat = GetAudioFormatFromFilename(inputFileName);
+
                     // Convert to WAV 16kHz mono using FFMpeg (without loudness normalization for silence detection)
-                    await FFMpegArguments
-                        .FromFileInput(tempInputFile)
+                    var ffmpegArgs = FFMpegArguments
+                        .FromFileInput(tempInputFile);
+
+                    // Specify input format if detected to avoid misdetection issues
+                    if (!string.IsNullOrEmpty(inputFormat))
+                    {
+                        ffmpegArgs = FFMpegArguments
+                            .FromFileInput(tempInputFile, false, input => input.WithCustomArgument($"-f {inputFormat}"));
+                    }
+
+                    await ffmpegArgs
                         .OutputToFile(tempOutputFile, true, options => options
                             .WithCustomArgument("-ar 16000") // 16kHz sample rate
                             .WithCustomArgument("-ac 1") // Mono
@@ -801,7 +842,7 @@ namespace SharpAI.Services
                     }
 
                     outputStream.Position = 0;
-                    _logger.LogInformation("Successfully converted audio from {InputFileName} to WAV 16kHz mono", inputFileName);
+                    _logger.LogInformation("Successfully converted audio (content-type: {ContentType}) to WAV 16kHz mono", contentType);
                     return outputStream;
                 }
                 finally
@@ -820,7 +861,7 @@ namespace SharpAI.Services
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Failed to convert audio file {InputFileName} to WAV 16kHz with silence removal", inputFileName);
+                _logger.LogError(ex, "Failed to convert audio file (content-type: {ContentType}) to WAV 16kHz", contentType);
                 throw new InvalidOperationException($"Audio conversion failed: {ex.Message}", ex);
             }
         }

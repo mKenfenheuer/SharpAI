@@ -123,7 +123,7 @@ public class AudioController : ControllerBase
         // Convert audio to WAV 16kHz format before transcription
         using var convertedAudioStream = await _whisperService.ConvertToWav16kHzAsync(
             originalAudioStream,
-            request.File.FileName ?? "audio");
+            request.File.ContentType ?? "audio/mpeg");
 
         var response = await _whisperService.TranscribeAsync(convertedAudioStream, request);
 
@@ -184,7 +184,7 @@ public class AudioController : ControllerBase
         // Convert audio to WAV 16kHz format before transcription
         using var convertedAudioStream = await _whisperService.ConvertToWav16kHzAsync(
             originalAudioStream,
-            request.File.FileName ?? "audio");
+            request.File.ContentType ?? "audio/mpeg");
 
         var completeResponse = new System.Text.StringBuilder();
 
