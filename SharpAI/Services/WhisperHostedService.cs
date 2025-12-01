@@ -812,8 +812,8 @@ namespace SharpAI.Services
                         await inputAudioStream.CopyToAsync(fileStream);
                     }
 
-                    // Detect input format from file extension
-                    var inputFormat = GetAudioFormatFromFilename(inputFileName);
+                    // Detect input format from content type
+                    var inputFormat = GetAudioFormatFromContentType(contentType);
 
                     // Convert to WAV 16kHz mono using FFMpeg (without loudness normalization for silence detection)
                     var ffmpegArgs = FFMpegArguments
