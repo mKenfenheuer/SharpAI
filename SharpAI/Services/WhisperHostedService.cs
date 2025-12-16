@@ -810,6 +810,7 @@ namespace SharpAI.Services
                     using (var fileStream = File.Create(tempInputFile))
                     {
                         await inputAudioStream.CopyToAsync(fileStream);
+                        await inputAudioStream.FlushAsync();
                     }
 
                     // Detect input format from content type

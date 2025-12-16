@@ -230,7 +230,7 @@ public class StreamingInferenceEngine
                 break;
             }
 
-            if (_parser.HasConstraint && _parser.IsInFinalContent && grammar == null && request.ResponseFormat != null)
+            if ((_parser.HasConstraint || request.ResponseFormat?.JsonSchema?.Strict == true) && _parser.IsInFinalContent && grammar == null && request.ResponseFormat != null)
             {
                 yield return new InferResponse<ChatCompletionResponse>()
                 {
