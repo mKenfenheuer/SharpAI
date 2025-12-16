@@ -238,6 +238,21 @@ public class HarmonyParser : IDisposable
         }
     }
 
+    public void SetConstraintType(string constraintType)
+    {
+        // we can only set constraint type if we are in final content and no content has been sent yet
+
+        var raw = _rawContent.ToString();
+        if (IsInFinalContent && raw.EndsWith(HarmonyFormattingToken.Message.AsString()))
+        {
+            _parserState.ConstraintType = constraintType;
+            raw = raw.Substring(0, raw.Length - HarmonyFormattingToken.Message.AsString().Length) +
+                  $"{HarmonyFormattingToken.ConstrainedFormat.AsString()}{constraintType}{HarmonyFormattingToken.Message.AsString()}";
+            _rawContent.Clear();
+            _rawContent.Append(raw);
+        }
+    }
+
     private HarmonyDelta HandleContentToken(string token)
     {
         if (_parserState.CurrentChannel == HarmonyChannel.Final && _currentMessage.Role == HarmonyRole.Assistant)
@@ -518,7 +533,7 @@ public class HarmonyParser : IDisposable
             {
                 CreateToolCallFromCurrentState();
             }
-            if(_currentMessage.Content.Count > 0)
+            if (_currentMessage.Content.Count > 0)
             {
                 if (_parserState.CurrentChannel == null)
                 {

@@ -232,6 +232,11 @@ public class StreamingInferenceEngine
 
             if ((_parser.HasConstraint || request.ResponseFormat?.JsonSchema?.Strict == true) && _parser.IsInFinalContent && grammar == null && request.ResponseFormat != null)
             {
+                if(!_parser.HasConstraint)
+                {
+                    _logger.LogInformation("Enabling JSON constraint for strict response format enforcement");
+                    _parser.SetConstraintType("json");
+                }
                 yield return new InferResponse<ChatCompletionResponse>()
                 {
                     ExitReason = InferExitReason.SwitchToGrammar
