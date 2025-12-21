@@ -49,4 +49,4 @@ deploy_production:
   script:
     - docker login -u $CI_REGISTRY_USER -p $CI_REGISTRY_PASSWORD $CI_REGISTRY
     - docker stop $CI_PROJECT_NAME || true && docker rm $CI_PROJECT_NAME || true
-    - docker run -d --name $CI_PROJECT_NAME -p 0.0.0.0:12080:80 -h $CI_PROJECT_NAME.ksol.it --restart always -v /ssd/docker/data/$CI_PROJECT_NAME/:/app/Data/ --gpus all $CI_REGISTRY_IMAGE:cuda-$CI_COMMIT_SHORT_SHA
+    - docker run -d --name $CI_PROJECT_NAME -p 0.0.0.0:12080:80 -h $CI_PROJECT_NAME.ksol.it --restart always -v /mnt/data/$CI_PROJECT_NAME/:/app/Data/ --gpus all $CI_REGISTRY_IMAGE:cuda-$CI_COMMIT_SHORT_SHA
