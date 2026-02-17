@@ -23,23 +23,4 @@ namespace SharpAI.Models
         public IAsyncEnumerable<AudioTranscriptionChunk>? StreamingResponse { get; set; }
         public Exception? Error { get; set; }
     }
-
-    /// <summary>
-    /// Internal request structure for the LLamaSharp chat completion queue
-    /// </summary>
-    public class LLamaSharpInternalRequest
-    {
-        public string RequestId { get; set; } = string.Empty;
-        public ChatCompletionRequest CompletionRequest { get; set; } = null!;
-        public CancellationToken CancellationToken { get; set; }
-    }
-
-    /// <summary>
-    /// Internal response structure for the LLamaSharp chat completion queue
-    /// </summary>
-    public class LLamaSharpInternalResponse
-    {
-        public IAsyncEnumerable<ChatCompletionResponse>? StreamingResponse { get; set; }
-        public Exception? Error { get; set; }
-    }
 }

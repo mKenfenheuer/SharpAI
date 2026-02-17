@@ -33,24 +33,12 @@ public class Program
         // Register services
         builder.Services.AddHttpClient();
         
-        builder.Services.AddSingleton<SharpAI.Services.LLamaModelManager>();
-        builder.Services.AddSingleton<SharpAI.Services.LLamaNativeLogging>();
         builder.Services.AddSingleton<SharpAI.Services.WhisperModelManager>();
-        builder.Services.AddSingleton<SharpAI.Services.RequestLogger>();
-        
-        // Register harmony services
-        builder.Services.AddScoped<SharpAI.Services.Harmony.HarmonyFormatter>();
-        builder.Services.AddScoped<SharpAI.Services.Harmony.StreamingInferenceEngine>();
-        builder.Services.AddScoped<SharpAI.Services.Harmony.HarmonyParser>();
     
         // Register llama and whisper hosted services
         builder.Services.AddSingleton<SharpAI.Services.WhisperHostedService>();
         builder.Services.AddHostedService<SharpAI.Services.WhisperHostedService>(provider => 
             provider.GetRequiredService<SharpAI.Services.WhisperHostedService>());
-            
-        builder.Services.AddSingleton<SharpAI.Services.LLamaSharpHostedService>();
-        builder.Services.AddHostedService<SharpAI.Services.LLamaSharpHostedService>(provider => 
-            provider.GetRequiredService<SharpAI.Services.LLamaSharpHostedService>());
 
         // Configure form options for large file uploads
         builder.Services.Configure<FormOptions>(options =>

@@ -12,13 +12,11 @@ public class AudioController : ControllerBase
 {
     private readonly WhisperHostedService _whisperService;
     private readonly ILogger<AudioController> _logger;
-    private readonly RequestLogger _requestLogger;
 
-    public AudioController(WhisperHostedService whisperService, ILogger<AudioController> logger, RequestLogger requestLogger)
+    public AudioController(WhisperHostedService whisperService, ILogger<AudioController> logger)
     {
         _whisperService = whisperService;
         _logger = logger;
-        _requestLogger = requestLogger;
     }
 
     [HttpPost("transcriptions")]
@@ -30,27 +28,10 @@ public class AudioController : ControllerBase
         {
             _logger.LogInformation("[{RequestId}] Received audio transcription request for file: {FileName} ({Size} bytes)",
                 requestId, formRequest.File?.FileName, formRequest.File?.Length);
-            
-            // Log request to JSONL file
-            await _requestLogger.LogRequestAsync(requestId, new
-            {
-                Endpoint = "transcriptions",
-                FileName = formRequest.File?.FileName,
-                FileSize = formRequest.File?.Length,
-                ContentType = formRequest.File?.ContentType,
-                Model = formRequest.Model,
-                Language = formRequest.Language,
-                Prompt = formRequest.Prompt,
-                ResponseFormat = formRequest.ResponseFormat,
-                Temperature = formRequest.Temperature,
-                TimestampGranularities = formRequest.TimestampGranularities,
-                Stream = formRequest.Stream
-            });
 
             // Validate file
             if (formRequest.File == null || formRequest.File.Length == 0)
             {
-                await _requestLogger.LogErrorAsync(requestId, "No audio file provided");
                 return BadRequest(new { error = new { message = "No audio file provided", type = "invalid_request_error" } });
             }
 
@@ -63,7 +44,6 @@ public class AudioController : ControllerBase
             }
             if (!allowedTypes.Contains(contentType))
             {
-                await _requestLogger.LogErrorAsync(requestId, $"Invalid audio file type: {contentType}");
                 return BadRequest(new { error = new { message = $"Invalid audio file type: {contentType}", type = "invalid_request_error" } });
             }
 
@@ -95,7 +75,6 @@ public class AudioController : ControllerBase
         catch (Exception ex)
         {
             _logger.LogError(ex, "[{RequestId}] Error processing audio transcription", requestId);
-            await _requestLogger.LogErrorAsync(requestId, ex.Message, ex.StackTrace);
             return StatusCode(500, new { requestId = requestId, error = new { message = ex.Message, type = ex.GetType().Name } });
         }
     }
@@ -131,13 +110,6 @@ public class AudioController : ControllerBase
 
         // Log final response
         _logger.LogInformation("[{RequestId}] Completed audio transcription", requestId);
-        await _requestLogger.LogFinalResponseAsync(requestId, new
-        {
-            ResponseFormat = responseFormat.ToString(),
-            Text = response.Text,
-            SegmentCount = response.Segments?.Count ?? 0,
-            Duration = response.Duration
-        });
 
         // Handle different response formats
         return responseFormat switch
@@ -213,11 +185,6 @@ public class AudioController : ControllerBase
 
         // Log final response
         _logger.LogInformation("[{RequestId}] Completed streaming audio transcription", requestId);
-        await _requestLogger.LogFinalResponseAsync(requestId, new
-        {
-            StreamingResponse = true,
-            CompleteText = completeResponse.ToString()
-        });
 
         return new EmptyResult();
     }
@@ -233,25 +200,10 @@ public class AudioController : ControllerBase
         {
             _logger.LogInformation("[{RequestId}] Received audio translation request for file: {FileName} ({Size} bytes)",
                 requestId, formRequest.File?.FileName, formRequest.File?.Length);
-            
-            // Log request to JSONL file
-            await _requestLogger.LogRequestAsync(requestId, new
-            {
-                Endpoint = "translations",
-                FileName = formRequest.File?.FileName,
-                FileSize = formRequest.File?.Length,
-                ContentType = formRequest.File?.ContentType,
-                Model = formRequest.Model,
-                Prompt = formRequest.Prompt,
-                ResponseFormat = formRequest.ResponseFormat,
-                Temperature = formRequest.Temperature,
-                TimestampGranularities = formRequest.TimestampGranularities
-            });
 
             // Validate file
             if (formRequest.File == null || formRequest.File.Length == 0)
             {
-                await _requestLogger.LogErrorAsync(requestId, "No audio file provided");
                 return BadRequest(new { error = new { message = "No audio file provided", type = "invalid_request_error" } });
             }
 
@@ -285,14 +237,6 @@ public class AudioController : ControllerBase
 
             // Log final response
             _logger.LogInformation("[{RequestId}] Completed audio translation", requestId);
-            await _requestLogger.LogFinalResponseAsync(requestId, new
-            {
-                ResponseFormat = responseFormat.ToString(),
-                Text = response.Text,
-                SegmentCount = response.Segments?.Count ?? 0,
-                Duration = response.Duration,
-                Task = response.Task
-            });
 
             // Handle different response formats
             return responseFormat switch
@@ -328,7 +272,6 @@ public class AudioController : ControllerBase
         catch (Exception ex)
         {
             _logger.LogError(ex, "[{RequestId}] Error processing audio translation", requestId);
-            await _requestLogger.LogErrorAsync(requestId, ex.Message, ex.StackTrace);
             return StatusCode(500, new { requestId = requestId, error = new { message = ex.Message, type = ex.GetType().Name } });
         }
     }
