@@ -1,4 +1,0 @@
-[submodule "LLamaSharp"]
-	path = LLamaSharp
-	url = https://github.com/mKenfenheuer/LLamaSharp.git
-	branch = llama_cpp_commit_3526657
