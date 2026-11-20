@@ -1,0 +1,9 @@
+bin/
+obj/
+**/bin/
+**/obj/
+SharpAI/Data/
+.git/
+.vs/
+.vscode/
+*.md

@@ -1,2 +1,8 @@
 obj/
 bin/
+# Local / tooling
+.DS_Store
+CLAUDE.md
+.claude/
+__pycache__/
+*.pyc

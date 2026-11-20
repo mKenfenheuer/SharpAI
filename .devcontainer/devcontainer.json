@@ -1,20 +1,19 @@
 {
-  "build": { "dockerfile": "Dockerfile" },
-  "mounts": [
-    {
-      "source": "/ssd/docker/data/sharpai",
-      "target": "/workspaces/sharpai/SharpAI/Data",
-      "type": "bind"
-    }
-  ],
+  "build": {
+    "dockerfile": "Dockerfile"
+  },
   "customizations": {
     "vscode": {
-      "extensions": ["ms-dotnettools.csdevkit"]
+      "extensions": [
+        "ms-dotnettools.csdevkit"
+      ]
     }
   },
   "runArgs": [
-      "--gpus",
-      "all"
+    "--gpus",
+    "all"
   ],
-  "forwardPorts": [5164]
+  "forwardPorts": [
+    5164
+  ]
 }
